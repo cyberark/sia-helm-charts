@@ -124,7 +124,7 @@ kubectl get pods -n sia-k8s-connector
 **View connector logs**
 
 ```bash
-kubectl logs -n sia-k8s-connector -l app.kubernetes.io/name=sia-k8s-connector --tail=100
+kubectl logs -n sia-k8s-connector -l app.kubernetes.io/instance=sia-connector --tail=100
 ```
 
 **Describe a pod for events**
