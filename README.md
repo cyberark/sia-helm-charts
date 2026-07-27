@@ -102,6 +102,18 @@ helm upgrade sia-connector sia/sia-k8s-connector \
 
 ---
 
+## Rolling back to the previous version
+
+To revert a release to its previous revision:
+
+```bash
+helm rollback sia-connector -n sia-k8s-connector
+```
+
+> **Note:** Rollback is only supported to the immediately preceding Helm chart version. Rolling back further than one version is not supported.
+
+---
+
 ## Uninstalling
 
 ```bash
