@@ -47,7 +47,31 @@ kubectl create secret generic sia-auth \
 
 > **Note:** All four values are required. Obtain them from the SIA Admin Portal under your connector pool settings.
 
-### 4. Install the chart
+### 4. Create the image pull secret
+
+If the connector image is hosted in a private registry, create a `docker-registry` secret so Kubernetes can pull it:
+
+```bash
+kubectl create secret docker-registry sia-registry-creds \
+  --docker-server="<REGISTRY_SERVER>" \
+  --docker-username="<REGISTRY_USERNAME>" \
+  --docker-password="<REGISTRY_PASSWORD>" \
+  --namespace sia-k8s-connector
+```
+
+For example:
+
+```bash
+kubectl create secret docker-registry sia-registry-creds \
+  --docker-server="docker.io" \
+  --docker-username="myuser" \
+  --docker-password="mypassword" \
+  --namespace sia-k8s-connector
+```
+
+> **Note:** Skip this step if the image repository is publicly accessible.
+
+### 5. Install the chart
 
 ```bash
 helm upgrade --install sia-connector sia/sia-k8s-connector \
@@ -57,7 +81,8 @@ helm upgrade --install sia-connector sia/sia-k8s-connector \
   --set replicaCount=1 \
   --set image.repository="docker.io/<IMAGE_REPOSITORY>" \
   --set image.tag="latest" \
-  --set image.pullPolicy="Always"
+  --set image.pullPolicy="Always" \
+  --set imagePullSecrets[0].name="sia-registry-creds"
 ```
 
 Replace every `<…>` placeholder with real values (see the table below).
@@ -81,6 +106,7 @@ If your cluster nodes route outbound traffic through an HTTP/HTTPS proxy, pass i
 | `image.repository` | Docker image repository (e.g. `docker.io/cyberark/cms-k8s-connector`) | Yes | — |
 | `image.tag` | Docker image tag — always use `latest` | No | `latest` |
 | `image.pullPolicy` | Kubernetes image pull policy | No | `Always` |
+| `imagePullSecrets[0].name` | Name of the `docker-registry` secret used to pull the image from a private registry | No | — |
 | `proxy` | HTTP/HTTPS proxy URL for outbound connector traffic | No | `""` |
 
 ---
