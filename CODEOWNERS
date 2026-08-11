@@ -1,0 +1,10 @@
+# CODEOWNERS for sia-helm-charts
+#
+# Code owners are automatically requested for review when someone opens a pull
+# request that modifies matching files. Owners can be GitHub usernames (@user)
+# or teams (@cyberark/<team-slug>).
+#
+# TODO: Replace the placeholder below with the correct CyberArk owning team or
+# maintainers before making this repository public.
+
+* @cyberark/TODO-OWNING-TEAM
