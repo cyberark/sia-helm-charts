@@ -1,0 +1,21 @@
+Copyright (c) 2025 CyberArk Software Ltd. All rights reserved.
+
+The SIA Kubernetes Connector container image built from this repository
+redistributes the following third-party open source components:
+
+1) Alpine Linux base image and the following apk packages
+   (https://www.alpinelinux.org/) : MIT License
+   - bash (https://www.gnu.org/software/bash/) : GPL-3.0-or-later
+   - curl (https://curl.se/) : curl License (MIT/X derivate)
+   - ca-certificates (https://www.mozilla.org/en-US/about/governance/policies/security-group/certs/) : MPL-2.0
+   - jq (https://github.com/jqlang/jq) : MIT License
+   - shadow (https://github.com/shadow-maint/shadow) : BSD-3-Clause License
+
+2) kubectl (https://github.com/kubernetes/kubectl) : Apache License 2.0
+   Copyright The Kubernetes Authors
+   Downloaded at build time from https://dl.k8s.io/
+
+The full text of the Apache License 2.0 is provided in the LICENSE file at the
+root of this repository. The base image and the exact set of bundled packages
+are defined in sia-k8s-connector/docker/Dockerfile; regenerate this notice if
+those dependencies change.
