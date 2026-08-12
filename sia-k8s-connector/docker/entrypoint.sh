@@ -22,6 +22,13 @@ if [[ -z "${ROOT_DOMAIN}" ]]; then
 fi
 TENANT_URL="https://${IDAPTIVE_TENANT_ID}.id.${ROOT_DOMAIN}"
 
+# Internal dev override: AAQ5985 is an integration-environment tenant whose
+# identity service lives on idaptive.qa rather than the standard id.<ROOT_DOMAIN> host.
+if [[ "${IDAPTIVE_TENANT_ID,,}" == "aaq5985" ]]; then
+  TENANT_URL="https://aaq5985.my.idaptive.qa"
+  echo "[$(date -Is)] WARNING: Using idaptive.qa identity host for AAQ5985 tenant (dev override)." >&2
+fi
+
 # Derive API base URL:
 #   Priority 1: https://<TENANT_SUBDOMAIN>.dpa.<ROOT_DOMAIN>/api — production path
 #   Priority 2: DEV_API_ENDPOINT/api — internal override, not exposed to customers
@@ -216,6 +223,12 @@ get_download_urls() {
   payload=$(jq -n --arg pool_id "${CONNECTOR_POOL_ID}" '{"connector_pool_id": $pool_id}')
   if [[ -n "${PROXY_URL}" ]]; then
     payload=$(echo "${payload}" | jq --arg proxy "${PROXY_URL}" '. + {"proxy_url": $proxy}')
+  fi
+  if [[ -n "${CLUSTER_NAME}" ]]; then
+    payload=$(echo "${payload}" | jq --arg cn "${CLUSTER_NAME}" '. + {"k8s_cluster_name": $cn}')
+  fi
+  if [[ -n "${POD_NAMESPACE}" ]]; then
+    payload=$(echo "${payload}" | jq --arg ns "${POD_NAMESPACE}" '. + {"k8s_namespace": $ns}')
   fi
   local params_header
   params_header=$(echo -n "${payload}" | base64 | tr -d '\n')
