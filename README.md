@@ -11,6 +11,8 @@ It is the recommended path for teams that prefer managing Helm releases directly
 |------|----------------|
 | [kubectl](https://kubernetes.io/docs/tasks/tools/) | 1.24+ |
 | [Helm](https://helm.sh/docs/intro/install/) | 3.10+ |
+| [jq](https://jqlang.github.io/jq/) | 1.6+ |
+| [curl](https://curl.se/) | any recent |
 
 You must also have `kubectl` configured and pointing at the target cluster before running any of the commands below.
 
@@ -108,35 +110,207 @@ If your cluster nodes route outbound traffic through an HTTP/HTTPS proxy, pass i
 | `image.pullPolicy` | Kubernetes image pull policy | No | `Always` |
 | `imagePullSecrets[0].name` | Name of the `docker-registry` secret used to pull the image from a private registry | No | — |
 | `proxy` | HTTP/HTTPS proxy URL for outbound connector traffic | No | `""` |
+| `maintenanceRolloutTimeout` | Seconds the post-upgrade/post-rollback hook waits for the StatefulSet rollout to become healthy before disabling maintenance | No | `300` |
+
+---
+
+## Maintenance mode (upgrades & rollbacks)
+
+Each connector can host long-running sessions (up to 24 h). To avoid interrupting active sessions during an upgrade or rollback, place connectors into **maintenance mode** first: the SIA platform stops routing new sessions to them while existing sessions finish naturally.
+
+The chart ships with a `helm sia-maintenance` plugin that calls the SIA API **directly from your local machine** — no Helm revision is created, so `helm history` stays clean and `helm rollback` always targets the correct previous chart version.
+
+The chart also includes a `post-upgrade` / `post-rollback` hook that **automatically disables** maintenance mode once the new pods are verified healthy.
+
+---
+
+### Installing the `sia-maintenance` plugin
+
+#### Prerequisites
+
+The plugin runs locally and requires the following tools in your `PATH`:
+
+| Tool | Purpose |
+|------|---------|
+| `kubectl` | Read the `sia-auth` Secret and connector ConfigMaps from the cluster |
+| `curl` | Call the SIA REST API |
+| `jq` | Parse JSON responses |
+| `base64` | Decode Secret values |
+
+#### Install from the chart repository
+
+```bash
+# Clone the chart repository (or use an existing local checkout)
+git clone https://github.com/cyberark/sia-helm-charts.git
+cd sia-helm-charts
+
+# Install the plugin
+helm plugin install ./plugins/sia-maintenance
+```
+
+#### Verify the installation
+
+```bash
+helm sia-maintenance --help
+```
+
+Expected output:
+
+```
+Usage: helm -n <namespace> sia-maintenance <enable|disable> [options]
+
+Commands:
+  enable   Put all connectors in the namespace into maintenance mode
+  disable  Take all connectors out of maintenance mode
+...
+```
+
+#### Uninstall the plugin
+
+```bash
+helm plugin uninstall sia-maintenance
+```
+
+---
+
+### How the plugin works
+
+When `enable` or `disable` is called, the plugin:
+
+1. Reads `username`, `password`, `idaptiveTenantId`, and `tenantSubdomain` from the `sia-auth` Secret in the target namespace via `kubectl`.
+2. Obtains an OAuth2 access token from the SIA identity endpoint.
+3. Discovers all registered connectors by listing Kubernetes ConfigMaps whose name ends with `-connector-id` (written by each pod on first registration).
+4. Calls `PUT /api/connectors/{id}/maintenance` for each connector.
+5. Verifies the API response confirms the requested state; exits non-zero if any connector fails.
+
+No Helm operation is performed. The plugin does not modify any Kubernetes resource.
+
+> **Note:** Pass `-n <NAMESPACE>` to `helm` (before the plugin name), not to the subcommand.  
+> Helm consumes the flag and exports it as `$HELM_NAMESPACE`, which the plugin reads.
+
+```bash
+helm -n <NAMESPACE> sia-maintenance enable    # correct
+helm sia-maintenance enable -n <NAMESPACE>    # also works
+```
+
+---
+
+### Safe upgrade (graceful — drain sessions first)
+
+Use this flow when connectors have active sessions you do not want to interrupt.
+
+```bash
+# Step 1 — enable maintenance mode.
+#   The SIA platform stops routing new sessions to the connectors.
+#   Pods keep running; existing sessions continue until they finish.
+helm -n <NAMESPACE> sia-maintenance enable
+
+# Step 2 — wait for in-flight sessions to drain.
+#   This can take anywhere from a few minutes up to 24 h depending on active sessions.
+#   Monitor session counts in the SIA Admin Portal or connector logs.
+
+# Step 3 — upgrade to the new chart version.
+#   The post-upgrade hook waits for all pods to become healthy, then automatically
+#   disables maintenance mode so new sessions can be routed again.
+helm upgrade sia-connector ./sia-k8s-connector/sia-connector-<NEW_VERSION>.tgz \
+  --namespace <NAMESPACE> \
+  --reuse-values
+```
+
+If the post-upgrade hook fails (e.g. the rollout never becomes healthy), maintenance mode is left **enabled** intentionally — the connector will not accept new sessions on a broken deployment.
+
+### Fast upgrade (no session draining)
+
+Use this when there are no active long-running sessions, or in non-production environments.
+
+```bash
+helm upgrade sia-connector ./sia-k8s-connector/sia-connector-<NEW_VERSION>.tgz \
+  --namespace <NAMESPACE> \
+  --reuse-values
+```
+
+The post-upgrade hook still runs and disables maintenance mode after a healthy rollout (maintenance was never enabled, so this is a no-op on the API side).
+
+---
+
+### Safe rollback (graceful — drain sessions first)
+
+Because `helm sia-maintenance enable` creates **no Helm revision**, `helm rollback` without a revision number always targets the correct immediately preceding chart version.
+
+```bash
+# Step 1 — enable maintenance mode.
+#   The SIA platform stops routing new sessions to the connectors.
+helm -n <NAMESPACE> sia-maintenance enable
+
+# Step 2 — wait for in-flight sessions to drain (0–24 h).
+
+# Step 3 — roll back to the previous chart version.
+#   The post-rollback hook waits for all pods to become healthy, then automatically
+#   disables maintenance mode.
+helm rollback sia-connector -n <NAMESPACE>
+```
+
+To roll back to a specific revision (e.g. if there are multiple revisions in history):
+
+```bash
+helm history sia-connector -n <NAMESPACE>    # identify the target revision number
+helm rollback sia-connector <REVISION> -n <NAMESPACE>
+```
+
+### Fast rollback (no session draining)
+
+```bash
+helm rollback sia-connector -n <NAMESPACE>
+```
+
+---
+
+### Manual maintenance control
+
+The plugin can also be used independently of any Helm operation — for example, to temporarily reduce load on connectors for maintenance windows unrelated to upgrades.
+
+```bash
+# Enable maintenance manually
+helm -n <NAMESPACE> sia-maintenance enable
+
+# ... perform maintenance work ...
+
+# Disable maintenance manually when ready
+helm -n <NAMESPACE> sia-maintenance disable
+```
 
 ---
 
 ## Upgrading
 
-To upgrade an existing release to a newer chart version:
+To upgrade to a newer chart version without session draining (fast path):
 
 ```bash
-helm repo update
-helm upgrade sia-connector sia/sia-k8s-connector \
-  --namespace sia-k8s-connector \
-  --version <NEW_CHART_VERSION> \
+helm upgrade sia-connector ./sia-k8s-connector/sia-connector-<NEW_VERSION>.tgz \
+  --namespace <NAMESPACE> \
   --reuse-values
 ```
 
-> **Tip:** Use `--reuse-values` to keep all previously set values without having to repeat them.  
+For a graceful upgrade that drains active sessions first, see the [Safe upgrade](#safe-upgrade-graceful--drain-sessions-first) flow above.
+
+> **Tip:** Use `--reuse-values` to keep all previously set values.  
 > Override individual values with additional `--set` flags as needed.
 
 ---
 
 ## Rolling back to the previous version
 
-To revert a release to its previous revision:
+For a graceful rollback that drains active sessions first, see the [Safe rollback](#safe-rollback-graceful--drain-sessions-first) flow above.
+
+For an immediate rollback:
 
 ```bash
-helm rollback sia-connector -n sia-k8s-connector
+helm rollback sia-connector -n <NAMESPACE>
 ```
 
 > **Note:** Rollback is only supported to the immediately preceding Helm chart version. Rolling back further than one version is not supported.
+
+---
 
 ---
 

@@ -1,0 +1,13 @@
+name: "sia-maintenance"
+version: "1.0.0"
+usage: "helm -n <namespace> sia-maintenance <enable|disable>"
+description: |-
+  Enable or disable maintenance mode on SIA Kubernetes connectors.
+
+  Reads credentials from the sia-auth secret in the target namespace and
+  calls the SIA API directly — no Helm revision is created.
+
+  Examples:
+    helm -n sia-k8s-connector sia-maintenance enable
+    helm -n sia-k8s-connector sia-maintenance disable
+command: "$HELM_PLUGIN_DIR/sia-maintenance.sh"
