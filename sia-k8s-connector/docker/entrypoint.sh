@@ -22,13 +22,6 @@ if [[ -z "${ROOT_DOMAIN}" ]]; then
 fi
 TENANT_URL="https://${IDAPTIVE_TENANT_ID}.id.${ROOT_DOMAIN}"
 
-# Internal dev override: AAQ5985 is an integration-environment tenant whose
-# identity service lives on idaptive.qa rather than the standard id.<ROOT_DOMAIN> host.
-if [[ "${IDAPTIVE_TENANT_ID,,}" == "aaq5985" ]]; then
-  TENANT_URL="https://aaq5985.my.idaptive.qa"
-  echo "[$(date -Is)] WARNING: Using idaptive.qa identity host for AAQ5985 tenant (dev override)." >&2
-fi
-
 # Derive API base URL:
 #   Priority 1: https://<TENANT_SUBDOMAIN>.dpa.<ROOT_DOMAIN>/api — production path
 #   Priority 2: DEV_API_ENDPOINT/api — internal override, not exposed to customers
@@ -196,6 +189,26 @@ get_access_token() {
   http_code=$(echo "${response}" | tail -1)
   response=$(echo "${response}" | head -n -1)
 
+  # HTTP 000 = curl-level failure (e.g. DNS resolution error).
+  # If the tenant URL uses the .id. subdomain pattern, retry once with .my. instead.
+  if [[ "${http_code}" == "000" && "${TENANT_URL}" == *".id."* ]]; then
+    local fallback_url="https://${IDAPTIVE_TENANT_ID,,}.my.idaptive.app"
+    log "WARNING: ${TENANT_URL} unreachable (HTTP 000) — retrying with ${fallback_url} ..."
+    response=$(curl -sS -X POST \
+      "${CURL_PROXY_ARGS[@]}" \
+      --data-urlencode "grant_type=client_credentials" \
+      --data-urlencode "client_id=${SIA_USERNAME}" \
+      --data-urlencode "client_secret=${SIA_PASSWORD}" \
+      -w "\n%{http_code}" \
+      "${fallback_url}/oauth2/platformtoken")
+    http_code=$(echo "${response}" | tail -1)
+    response=$(echo "${response}" | head -n -1)
+    if [[ "${http_code}" == "200" ]]; then
+      log "Fallback succeeded — updating TENANT_URL to ${fallback_url}"
+      TENANT_URL="${fallback_url}"
+    fi
+  fi
+
   if [[ "${http_code}" != "200" ]]; then
     log "ERROR: Token request failed with HTTP ${http_code}. Response: ${response}"
     exit 1
@@ -223,12 +236,6 @@ get_download_urls() {
   payload=$(jq -n --arg pool_id "${CONNECTOR_POOL_ID}" '{"connector_pool_id": $pool_id}')
   if [[ -n "${PROXY_URL}" ]]; then
     payload=$(echo "${payload}" | jq --arg proxy "${PROXY_URL}" '. + {"proxy_url": $proxy}')
-  fi
-  if [[ -n "${CLUSTER_NAME}" ]]; then
-    payload=$(echo "${payload}" | jq --arg cn "${CLUSTER_NAME}" '. + {"k8s_cluster_name": $cn}')
-  fi
-  if [[ -n "${POD_NAMESPACE}" ]]; then
-    payload=$(echo "${payload}" | jq --arg ns "${POD_NAMESPACE}" '. + {"k8s_namespace": $ns}')
   fi
   local params_header
   params_header=$(echo -n "${payload}" | base64 | tr -d '\n')
