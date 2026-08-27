@@ -41,6 +41,7 @@ DOWNLOAD_API_URL="${DOWNLOAD_API_URL:-${_API_BASE}/connectors/download-ephemeral
 UPGRADE_API_BASE_URL="${UPGRADE_API_BASE_URL:-${_API_BASE}/connectors}"
 PROXY_URL="${PROXY_URL:-}"
 POD_NAMESPACE="${POD_NAMESPACE:-}"
+CLUSTER_NAME="${CLUSTER_NAME:-}"
 
 # Build proxy args array for external curl calls; empty when no proxy is configured.
 CURL_PROXY_ARGS=()
@@ -236,6 +237,12 @@ get_download_urls() {
   payload=$(jq -n --arg pool_id "${CONNECTOR_POOL_ID}" '{"connector_pool_id": $pool_id}')
   if [[ -n "${PROXY_URL}" ]]; then
     payload=$(echo "${payload}" | jq --arg proxy "${PROXY_URL}" '. + {"proxy_url": $proxy}')
+  fi
+  if [[ -n "${CLUSTER_NAME}" ]]; then
+    payload=$(echo "${payload}" | jq --arg cn "${CLUSTER_NAME}" '. + {"k8s_cluster_name": $cn}')
+  fi
+  if [[ -n "${POD_NAMESPACE}" ]]; then
+    payload=$(echo "${payload}" | jq --arg ns "${POD_NAMESPACE}" '. + {"k8s_namespace": $ns}')
   fi
   local params_header
   params_header=$(echo -n "${payload}" | base64 | tr -d '\n')
