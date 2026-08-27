@@ -132,13 +132,9 @@ vlog "Tenant ID: ${IDAPTIVE_TENANT_ID}, subdomain: ${TENANT_SUBDOMAIN}"
 
 # ─── build API URLs ───────────────────────────────────────────────────────────
 
-# Dev override for the internal AAQ5985 / aaq5985 tenant
-if [ "${IDAPTIVE_TENANT_ID}" = "AAQ5985" ] || [ "${IDAPTIVE_TENANT_ID}" = "aaq5985" ]; then
-  TOKEN_URL="https://aaq5985.my.idaptive.qa/oauth2/platformtoken"
-  vlog "Using idaptive.qa token URL (dev override for AAQ5985 tenant)."
-else
-  TOKEN_URL="https://${IDAPTIVE_TENANT_ID}.id.${ROOT_DOMAIN}/oauth2/platformtoken"
-fi
+# Default identity host — falls back to <tenant>.my.idaptive.app below
+# if this host is unreachable (see the HTTP 000 retry block).
+TOKEN_URL="https://${IDAPTIVE_TENANT_ID}.id.${ROOT_DOMAIN}/oauth2/platformtoken"
 
 if [ -n "${DEV_API_ENDPOINT}" ]; then
   CONNECTORS_API_BASE="${DEV_API_ENDPOINT}/api/connectors"

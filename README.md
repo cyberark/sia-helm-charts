@@ -116,6 +116,9 @@ If your cluster nodes route outbound traffic through an HTTP/HTTPS proxy, pass i
 
 ## Maintenance mode (upgrades & rollbacks)
 
+> **Looking for a step-by-step operator walkthrough?**
+> See the dedicated [Upgrade, Rollback & Uninstall guide](docs/upgrade-rollback-uninstall.md).
+
 Each connector can host long-running sessions (up to 24 h). To avoid interrupting active sessions during an upgrade or rollback, place connectors into **maintenance mode** first: the SIA platform stops routing new sessions to them while existing sessions finish naturally.
 
 The chart ships with a `helm sia-maintenance` plugin that calls the SIA API **directly from your local machine** — no Helm revision is created, so `helm history` stays clean and `helm rollback` always targets the correct previous chart version.
