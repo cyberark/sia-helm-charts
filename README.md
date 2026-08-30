@@ -1,31 +1,61 @@
 # SIA K8s Connector — Helm Chart
 
 This Helm chart deploys the **SIA Kubernetes Connector** into your cluster.  
-It is the recommended path for teams that prefer managing Helm releases directly, without using the guided setup script.
+It is the recommended path for teams that prefer managing Helm releases directly.
 
 ---
 
 ## Prerequisites
 
-| Tool | Minimum version |
-|------|----------------|
-| [kubectl](https://kubernetes.io/docs/tasks/tools/) | 1.24+ |
-| [Helm](https://helm.sh/docs/intro/install/) | 3.10+ |
-| [jq](https://jqlang.github.io/jq/) | 1.6+ |
-| [curl](https://curl.se/) | any recent |
+| Tool | Minimum version | Needed for |
+|------|----------------|------------|
+| [kubectl](https://kubernetes.io/docs/tasks/tools/) | 1.24+ | Talking to your cluster |
+| [Helm](https://helm.sh/docs/intro/install/) | 3.10+ | Installing the chart |
+| [Docker](https://docs.docker.com/engine/install/) | any current, daemon running | Building the connector image |
+| [curl](https://curl.se/) | any recent | The prerequisite checks and the maintenance plugin |
+| [jq](https://jqlang.github.io/jq/) | 1.6+ | The `sia-maintenance` plugin only |
+| [AWS CLI](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html) | v2 | Only if your registry is Amazon ECR |
 
-You must also have `kubectl` configured and pointing at the target cluster before running any of the commands below.
+You also need:
+
+- `kubectl` configured and pointing at the target cluster before running any of the commands below.
+- Permission on that cluster to create a namespace, a secret, a StatefulSet, and a **ClusterRole** — the chart grants the connector read access to node labels, which is cluster-scoped.
+- A container registry you can push to. The image is built locally rather than pulled from CyberArk, because your environment's domain is compiled into it.
+- From the SIA Admin Portal: your Connector Pool ID, Identity tenant ID, tenant subdomain, and a service account with permission to register connectors.
+
+### Verify all of this automatically
+
+`sia-connector-prerequisites.sh` checks every item above, plus the two things you cannot check from your own machine at all: whether your **cluster nodes** can reach your SIA environment, and whether the cluster has a StorageClass the connector's volume can actually bind to. It **installs nothing**.
+
+```bash
+cp sia-connector.env.example sia-connector.env
+$EDITOR sia-connector.env          # fill in the REQUIRED block
+chmod 600 sia-connector.env
+
+./sia-connector-prerequisites.sh --config ./sia-connector.env
+```
+
+It exits 0 when every check passes and 1 if any of them fails, so it also works as a CI gate. It needs no password, and the only object it creates anywhere is a throwaway connectivity-probe pod, which it deletes again — pass `--skip-egress-check` to avoid even that.
+
+Run it from the root of your clone and it finds both the chart archive and the connector build context on its own — no `CHART_REF` or `DOCKERFILE_DIR` needed. From anywhere else, pass `--chart-ref` and `--dockerfile-dir`.
+
+Each check, and what to do when it fails, is documented in [PREREQUISITES.md](PREREQUISITES.md).
 
 ---
 
 ## Installation
 
-### 1. Add the Helm repository
+### 1. Get the chart
+
+The chart ships in this repository, so a clone already has it — there is no Helm repository to add:
 
 ```bash
-helm repo add sia https://raw.githubusercontent.com/cyberark/sia-helm-charts/main/
-helm repo update
+git clone https://github.com/cyberark/sia-helm-charts.git
+cd sia-helm-charts
+ls sia-k8s-connector/sia-connector-*.tgz
 ```
+
+> **Note:** Helm cannot authenticate to a private GitHub repository, so `helm repo add` pointed at this repository will not work. Install from the archive, as every command below does.
 
 ### 2. Create the namespace
 
@@ -76,9 +106,8 @@ kubectl create secret docker-registry sia-registry-creds \
 ### 5. Install the chart
 
 ```bash
-helm upgrade --install sia-connector sia/sia-k8s-connector \
+helm upgrade --install sia-connector ./sia-k8s-connector/sia-connector-<CHART_VERSION>.tgz \
   --namespace sia-k8s-connector \
-  --version <CHART_VERSION> \
   --set connectorPoolId="<CONNECTOR_POOL_ID>" \
   --set replicaCount=1 \
   --set image.repository="docker.io/<IMAGE_REPOSITORY>" \
@@ -329,6 +358,16 @@ kubectl delete namespace sia-k8s-connector
 ---
 
 ## Troubleshooting
+
+**Re-check the environment first**
+
+Most install-time failures are an environment problem rather than a chart problem — a blocked egress path, no usable StorageClass, an expired registry token, insufficient RBAC. Re-running the prerequisite checks names the cause directly, and changes nothing:
+
+```bash
+./sia-connector-prerequisites.sh --config ./sia-connector.env
+```
+
+The transcript it writes (`sia-connector-prerequisites-<UTC>.log`, with credential values redacted) is a good thing to attach to a support ticket. Each check is documented in [PREREQUISITES.md](PREREQUISITES.md).
 
 **Check pod status**
 
