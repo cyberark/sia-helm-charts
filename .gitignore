@@ -1,0 +1,14 @@
+# Your filled-in copy of sia-connector.env.example. Holds tenant parameters and
+# is specific to one environment, so it is never committed. The example file is
+# the one under version control.
+sia-connector.env
+
+# Transcripts. Written next to the script on every run, with credential values
+# redacted, and safe to attach to a support ticket — but they are a record of one
+# run on one machine, not repository content.
+sia-connector-prerequisites-*.log
+sia-connector-install-*.log
+
+# Credential files the docs suggest creating, in case one outlives its `shred`.
+sia-password
+registry-token
