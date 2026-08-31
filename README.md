@@ -139,7 +139,6 @@ If your cluster nodes route outbound traffic through an HTTP/HTTPS proxy, pass i
 | `image.pullPolicy` | Kubernetes image pull policy | No | `Always` |
 | `imagePullSecrets[0].name` | Name of the `docker-registry` secret used to pull the image from a private registry | No | — |
 | `proxy` | HTTP/HTTPS proxy URL for outbound connector traffic | No | `""` |
-| `maintenanceRolloutTimeout` | Seconds the post-upgrade/post-rollback hook waits for the StatefulSet rollout to become healthy before disabling maintenance | No | `300` |
 
 ---
 
@@ -152,7 +151,7 @@ Each connector can host long-running sessions (up to 24 h). To avoid interruptin
 
 The chart ships with a `helm sia-maintenance` plugin that calls the SIA API **directly from your local machine** — no Helm revision is created, so `helm history` stays clean and `helm rollback` always targets the correct previous chart version.
 
-The chart also includes a `post-upgrade` / `post-rollback` hook that **automatically disables** maintenance mode once the new pods are verified healthy.
+After a safe upgrade or rollback, disable maintenance mode manually with `helm sia-maintenance disable` once the rollout is healthy and you are ready to accept new sessions.
 
 ---
 
@@ -242,14 +241,14 @@ helm -n <NAMESPACE> sia-maintenance enable
 #   Monitor session counts in the SIA Admin Portal or connector logs.
 
 # Step 3 — upgrade to the new chart version.
-#   The post-upgrade hook waits for all pods to become healthy, then automatically
-#   disables maintenance mode so new sessions can be routed again.
 helm upgrade sia-connector ./sia-k8s-connector/sia-connector-<NEW_VERSION>.tgz \
   --namespace <NAMESPACE> \
   --reuse-values
-```
 
-If the post-upgrade hook fails (e.g. the rollout never becomes healthy), maintenance mode is left **enabled** intentionally — the connector will not accept new sessions on a broken deployment.
+# Step 4 — verify the rollout is healthy, then disable maintenance mode.
+kubectl rollout status statefulset/sia-connector -n <NAMESPACE>
+helm -n <NAMESPACE> sia-maintenance disable
+```
 
 ### Fast upgrade (no session draining)
 
@@ -260,8 +259,6 @@ helm upgrade sia-connector ./sia-k8s-connector/sia-connector-<NEW_VERSION>.tgz \
   --namespace <NAMESPACE> \
   --reuse-values
 ```
-
-The post-upgrade hook still runs and disables maintenance mode after a healthy rollout (maintenance was never enabled, so this is a no-op on the API side).
 
 ---
 
@@ -277,9 +274,11 @@ helm -n <NAMESPACE> sia-maintenance enable
 # Step 2 — wait for in-flight sessions to drain (0–24 h).
 
 # Step 3 — roll back to the previous chart version.
-#   The post-rollback hook waits for all pods to become healthy, then automatically
-#   disables maintenance mode.
 helm rollback sia-connector -n <NAMESPACE>
+
+# Step 4 — verify the rollout is healthy, then disable maintenance mode.
+kubectl rollout status statefulset/sia-connector -n <NAMESPACE>
+helm -n <NAMESPACE> sia-maintenance disable
 ```
 
 To roll back to a specific revision (e.g. if there are multiple revisions in history):

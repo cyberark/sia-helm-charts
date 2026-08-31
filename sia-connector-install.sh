@@ -97,7 +97,7 @@ Optional
   --registry-password-file <path> Password/token file for the above
   --storage-class <name>          Required if the cluster has no default
   --proxy <url>                   Outbound HTTP/HTTPS proxy for the connector
-  --cluster-name <name>           Label connectors as <name>\<pod>; default: k8s
+  --cluster-name <name>           Label connectors as <name>\<pod>; default: Unknown
   --platform <os/arch>            Default: linux/amd64
   --kubectl-version <ver>         kubectl embedded in the image; default: v1.30.0
   --base-image <ref>              Image base layer; default: alpine:latest
@@ -378,7 +378,7 @@ if [[ "${_registered}" == "true" ]]; then
   log "  image      $(kubectl get pod "${_pod}" -n "${NAMESPACE}" -o jsonpath='{.status.containerStatuses[0].imageID}' 2>/dev/null)"
   log ""
   log "  In the SIA Admin Portal, the connector should now appear Online in pool"
-  log "  ${CONNECTOR_POOL_ID} as ${CLUSTER_NAME:-k8s}\\${_pod}."
+  log "  ${CONNECTOR_POOL_ID} as ${CLUSTER_NAME:-Unknown}\\${_pod}."
   log ""
   log "  Transcript: ${LOG_FILE}"
   exit 0
