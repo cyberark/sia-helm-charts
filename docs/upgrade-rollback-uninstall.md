@@ -6,8 +6,8 @@ to the previous one, and **uninstalling** the release cleanly.
 
 All three operations can interrupt long-running SIA sessions. This guide
 explains how to use the shipped `helm sia-maintenance` plugin together with
-the chart's built-in `post-upgrade` / `post-rollback` / `pre-delete` hooks so
-that active sessions drain gracefully instead of being cut mid-flight.
+the chart's built-in `pre-delete` hook so that active sessions drain
+gracefully instead of being cut mid-flight.
 
 > If you have not yet installed the connector, see the top-level
 > [README](../README.md) for the initial install flow. This guide assumes a
@@ -69,26 +69,6 @@ locally on your workstation and calls the SIA REST API directly:
 > the immediately preceding chart version — a stray Helm revision from
 > "toggle maintenance" would silently make `helm rollback` point at the wrong
 > release.
-
-### The automatic post-hook
-
-The chart includes a `post-upgrade` / `post-rollback` Job
-(`templates/maintenance-hook.yaml`) that runs after every `helm upgrade` and
-`helm rollback`. It:
-
-1. Waits up to `maintenanceRolloutTimeout` seconds (default: `300`) for the
-   StatefulSet rollout to become fully healthy
-   (`readyReplicas == replicas` **and** `currentRevision == updateRevision`).
-2. If the rollout is healthy, calls the SIA API to **disable maintenance
-   mode** on every connector so new sessions start flowing again.
-3. If the rollout **never becomes healthy**, the Job exits non-zero and
-   **leaves maintenance mode enabled**. This is intentional — a broken
-   deployment must not silently start accepting new sessions.
-
-Because the hook always tries to disable maintenance on success, both the
-"safe" and the "fast" flows use the exact same `helm upgrade` / `helm
-rollback` commands. The only difference is whether you enable maintenance
-first.
 
 ### The pre-delete hook
 
@@ -201,12 +181,14 @@ kubectl logs -n "${NAMESPACE}" -l app.kubernetes.io/instance=sia-connector \
   --tail=100 -f
 
 # ── Step 3 — upgrade to the new chart version ────────────────────────────
-# The post-upgrade hook waits for a healthy rollout, then automatically
-# disables maintenance mode so new sessions start flowing again.
 helm upgrade sia-connector \
   ./sia-k8s-connector/sia-connector-${NEW_VERSION}.tgz \
   --namespace "${NAMESPACE}" \
   --reuse-values
+
+# ── Step 4 — verify rollout health, then disable maintenance mode ────────
+kubectl rollout status statefulset/sia-connector -n "${NAMESPACE}"
+helm -n "${NAMESPACE}" sia-maintenance disable
 ```
 
 Verify the outcome:
@@ -214,11 +196,7 @@ Verify the outcome:
 ```bash
 helm history sia-connector    -n "${NAMESPACE}"
 kubectl get pods              -n "${NAMESPACE}"
-kubectl get jobs              -n "${NAMESPACE}"       # hook Jobs are cleaned up on success
 ```
-
-> **What if the hook fails?** Maintenance mode is left **enabled** on
-> purpose. See [Troubleshooting](#8-troubleshooting).
 
 ### 4.2 Fast upgrade (no session draining)
 
@@ -231,10 +209,6 @@ helm upgrade sia-connector \
   --namespace "${NAMESPACE}" \
   --reuse-values
 ```
-
-The `post-upgrade` hook still runs. Because maintenance was never enabled,
-disabling it is a no-op on the API side, but the healthy-rollout wait still
-provides a useful sanity check.
 
 > **Tip:** `--reuse-values` keeps every previously set value from the
 > current release. Override individual values with extra `--set` flags as
@@ -263,9 +237,11 @@ helm -n "${NAMESPACE}" sia-maintenance enable
 # ── Step 2 — wait for in-flight sessions to drain (0–24 h) ───────────────
 
 # ── Step 3 — roll back to the previous chart version ─────────────────────
-# The post-rollback hook waits for a healthy rollout, then automatically
-# disables maintenance mode.
 helm rollback sia-connector -n "${NAMESPACE}"
+
+# ── Step 4 — verify rollout health, then disable maintenance mode ────────
+kubectl rollout status statefulset/sia-connector -n "${NAMESPACE}"
+helm -n "${NAMESPACE}" sia-maintenance disable
 ```
 
 ### 5.2 Fast rollback (no session draining)
@@ -303,9 +279,6 @@ For example, to return to `sia-connector-1.0.19`:
 ```bash
 helm rollback sia-connector 2 -n "${NAMESPACE}"
 ```
-
-The same `post-rollback` hook logic (wait for healthy rollout, then disable
-maintenance) applies.
 
 ---
 
@@ -391,36 +364,24 @@ The `ROOT_DOMAIN` environment variable is an alternative to `--root-domain`.
 
 ## 8. Troubleshooting
 
-### The post-upgrade / post-rollback hook failed and maintenance mode is stuck ON
+### Maintenance mode is still enabled after upgrade or rollback
 
-This is by design: if the StatefulSet rollout never becomes healthy within
-`maintenanceRolloutTimeout` seconds (default `300`), the hook exits non-zero
-and leaves maintenance **enabled** so the broken deployment does not accept
-new sessions.
+If you used the safe upgrade or rollback flow, maintenance mode stays enabled
+until you disable it manually:
 
-Inspect what went wrong:
+```bash
+kubectl rollout status statefulset/sia-connector -n "${NAMESPACE}"
+helm -n "${NAMESPACE}" sia-maintenance disable
+```
+
+If the rollout is not healthy, fix the underlying pod issue before disabling
+maintenance — otherwise new sessions may be routed to a broken deployment.
 
 ```bash
 kubectl get pods                   -n "${NAMESPACE}"
 kubectl describe pod <POD_NAME>    -n "${NAMESPACE}"
 kubectl logs -n "${NAMESPACE}" -l app.kubernetes.io/instance=sia-connector --tail=200
-
-# The hook itself runs as a Job; if it still exists check its logs:
-kubectl get jobs                                        -n "${NAMESPACE}"
-kubectl logs job/sia-connector-maintenance-disable      -n "${NAMESPACE}"
 ```
-
-Once you have fixed the underlying issue and the pods are `Ready` again, you
-have two options:
-
-- **Preferred:** re-run the same `helm upgrade` (or `helm rollback`)
-  command. The post-hook will run again, see a healthy rollout, and
-  automatically disable maintenance.
-- **Manual:** disable maintenance directly with the plugin:
-
-  ```bash
-  helm -n "${NAMESPACE}" sia-maintenance disable
-  ```
 
 ### `No registered connectors found in namespace ...`
 
@@ -509,19 +470,27 @@ helm upgrade sia-connector \
   --namespace "${NAMESPACE}" \
   --reuse-values
 
-# 3. Verify
+# 3. Verify rollout and disable maintenance
+kubectl rollout status statefulset/sia-connector -n "${NAMESPACE}"
+helm -n "${NAMESPACE}" sia-maintenance disable
+
+# 4. Confirm release state
 helm history sia-connector -n "${NAMESPACE}"
 kubectl get pods           -n "${NAMESPACE}"
 
 # ---- regression discovered ----
 
-# 4. Enable maintenance again and drain
+# 5. Enable maintenance again and drain
 helm -n "${NAMESPACE}" sia-maintenance enable
 # ... wait ...
 
-# 5. Roll back to the previous revision (1.0.19)
+# 6. Roll back to the previous revision (1.0.19)
 helm rollback sia-connector -n "${NAMESPACE}"
 
-# 6. Confirm
+# 7. Verify rollout and disable maintenance
+kubectl rollout status statefulset/sia-connector -n "${NAMESPACE}"
+helm -n "${NAMESPACE}" sia-maintenance disable
+
+# 8. Confirm
 helm history sia-connector -n "${NAMESPACE}"
 ```
