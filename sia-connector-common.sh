@@ -135,9 +135,18 @@ ver_ge() {
 confirm() {
   local prompt="$1"
   [[ "${ASSUME_YES}" == "true" ]] && return 0
-  [[ -r /dev/tty ]] || die "cannot prompt for confirmation and --yes was not given."
-  local reply
-  read -rp "${prompt} [y/N] " reply </dev/tty
+  # `[[ -r /dev/tty ]]` is not enough: in a pipeline or CI job the device node
+  # exists and tests readable while not actually being connected, and the read
+  # then fails with a bare "Device not configured" from bash instead of the
+  # message below. Opening it is the only honest test — and it has to happen
+  # inside a group whose stderr is already redirected, because bash reports a
+  # failed redirection before any guard of ours can run.
+  if ! { true </dev/tty; } 2>/dev/null; then
+    die "cannot prompt for confirmation and --yes was not given.
+       Re-run with --yes, or from a terminal."
+  fi
+  local reply=""
+  read -rp "${prompt} [y/N] " reply </dev/tty || reply=""
   [[ "${reply}" == "y" || "${reply}" == "Y" ]]
 }
 
@@ -194,7 +203,7 @@ preparse_config() {
       if grep -qE '^[[:space:]]*(export[[:space:]]+)?SIA_PASSWORD=' "${CONFIG_FILE}"; then
         die "${CONFIG_FILE} assigns SIA_PASSWORD.
        Config files are easy to share or commit by accident, so the password is not
-       read from one. The prerequisite checks need no password at all. Remove that
+       read from one. With --check-only no password is needed at all. Remove that
        line; a credential is supplied at install time by an interactive prompt, by
        --password-file <path> (a file only you can read), or by the SIA_PASSWORD
        environment variable for CI."
@@ -645,19 +654,33 @@ check_egress() {
   EGRESS_POD="sia-egress-check-$$"
   EGRESS_POD_NS="${_probe_ns}"
   [[ -n "${PROXY_URL}" ]] && _proxy_arg="--proxy ${PROXY_URL}"
-  _script="for u in https://${IDAPTIVE_TENANT_ID}.id.${ROOT_DOMAIN} https://${TENANT_SUBDOMAIN}.dpa.${ROOT_DOMAIN}/api; do \
-             printf '%s ' \"\$u\"; \
-             curl -s -o /dev/null -w '%{http_code}\n' --max-time 15 ${_proxy_arg} \"\$u\" || echo 000; \
+  # Three things this probe script has to survive, all learned the hard way:
+  #
+  #   * `kubectl run -i` attaches only after the container has started, so
+  #     anything written in the first moment is lost. It ate the opening
+  #     `printf` of the first URL, leaving a bare status code that then read as
+  #     a URL. Hence the initial sleep, and one atomic write per result.
+  #   * `curl -w '%{http_code}'` already prints 000 when the transfer fails, so
+  #     an `|| echo 000` fallback prints it a second time. That orphan line
+  #     parsed as a URL with no code and was reported [ OK ] reachable — a dead
+  #     endpoint announced as a live one.
+  #   * kubectl sometimes replays a finished pod's output, so results can repeat.
+  #
+  # Every result line is therefore tagged, and the reader ignores anything else.
+  _script="sleep 2; \
+           for u in https://${IDAPTIVE_TENANT_ID}.id.${ROOT_DOMAIN} https://${TENANT_SUBDOMAIN}.dpa.${ROOT_DOMAIN}/api; do \
+             c=\$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 ${_proxy_arg} \"\$u\"); \
+             printf 'RESULT %s %s\n' \"\$u\" \"\${c:-000}\"; \
            done"
   if _out="$(kubectl run "${EGRESS_POD}" -n "${_probe_ns}" --image=curlimages/curl:latest \
               --restart=Never --rm -i --quiet --command -- sh -c "${_script}" 2>/dev/null)"; then
     EGRESS_POD=""
-    while read -r _url _code; do
-      [[ -z "${_url}" ]] && continue
-      # "kubectl run -i" sometimes replays a finished pod's output, so an
-      # endpoint can appear more than once. Duplicates are always whole lines,
-      # so reporting the first result per URL is sufficient — and avoids an
-      # inflated preflight count.
+    while read -r _tag _url _code; do
+      # Anything without the tag is noise: a partial first line, a replayed
+      # fragment, or pod chatter. Never guess at it.
+      [[ "${_tag}" == "RESULT" && -n "${_url}" ]] || continue
+      # Whole-line replays mean an endpoint can appear more than once; the first
+      # result per URL is the one that counts, and this keeps the pass count honest.
       case " ${_seen} " in *" ${_url} "*) continue ;; esac
       _seen="${_seen} ${_url}"
       # Any HTTP status proves the connection succeeded. These endpoints require
@@ -670,7 +693,13 @@ check_egress() {
         ok "reachable" "${_url} → HTTP ${_code}"
       fi
     done <<< "${_out}"
-    if [[ "${_blocked}" == "true" ]]; then
+    if [[ -z "${_seen}" ]]; then
+      # The pod ran but nothing tagged came back. Saying nothing would leave the
+      # "egress works" line below to speak for a measurement never taken.
+      warn "egress probe" "the probe pod returned no readable result"
+      info "not conclusive — this proves neither reachable nor blocked. Re-run, or"
+      info "pass --skip-egress-check if probe pods are restricted here."
+    elif [[ "${_blocked}" == "true" ]]; then
       info "no HTTP response at all means DNS, routing or a firewall is in the way —"
       info "the connector will not be able to register. Share this with your network"
       info "team, and add --proxy <url> if outbound traffic requires a proxy."

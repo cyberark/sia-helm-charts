@@ -1,13 +1,23 @@
-# SIA Kubernetes Connector — prerequisite checks
+# SIA Kubernetes Connector — prerequisites and preparation
 
-`sia-connector-prerequisites.sh` validates that this machine, your cluster, your registry
-and your tenant parameters are ready to run the connector. It **installs nothing**, needs
-**no password**, and exits 0 when every check passes and 1 if any of them fails — so it
-also works as a CI gate.
+`sia-connector-prerequisites.sh` gets your environment ready to release the connector, in
+two phases:
 
-Run it as often as you like, before you have credentials, a registry or a maintenance
-window. The only object it creates anywhere is a throwaway connectivity-probe pod, which it
-deletes again; `--skip-egress-check` avoids even that.
+1. **Checks** — validates this machine, your cluster, your registry and your tenant
+   parameters. Nothing is touched, and the script stops here if any check fails.
+2. **Preparation** — builds the connector image, verifies it, publishes it to your registry,
+   ensures the namespace, and creates the image pull secret and the `sia-auth` secret.
+
+It stops deliberately short of `helm upgrade --install`. That one step is yours to run.
+
+**`--check-only` runs phase 1 alone.** In that mode it changes nothing and needs no
+password, so it is safe to run as often as you like — before you have credentials, a
+registry or a maintenance window — and it works as a CI gate. Exit status is 0 on success
+and 1 on failure in either mode.
+
+Phase 2 writes to your cluster and your registry, so you are shown a summary of exactly what
+will be touched and asked to confirm before the first change. `--yes` skips that prompt for
+non-interactive use.
 
 Its transcript is a good thing to attach to a support ticket — it captures your whole
 environment without exposing secrets.
@@ -67,8 +77,13 @@ $EDITOR sia-connector.env          # fill in the REQUIRED block
 chmod 600 sia-connector.env
 ```
 
-The file deliberately holds no password. Values only a later install needs are ignored here
-rather than rejected, so one file serves both.
+The file deliberately holds no password — the script refuses to run if it assigns one, since
+config files get copied and committed by accident. Phase 2 needs the service-account password
+for the `sia-auth` secret; supply it by the interactive masked prompt, `--password-file
+<path>`, or the `SIA_PASSWORD` environment variable. `--check-only` needs none.
+
+Values that only the Helm release itself needs are ignored here rather than rejected, so one
+file serves both this script and the release.
 
 Confirm nothing you meant to set is still commented out — a value can look set and be
 silently ignored:
@@ -77,23 +92,33 @@ silently ignored:
 grep -vE '^\s*(#|$)' sia-connector.env
 ```
 
-### 2. Run
+### 2. Check, without changing anything
+
+```bash
+./sia-connector-prerequisites.sh --config ./sia-connector.env --check-only
+```
+
+### 3. Prepare
 
 ```bash
 ./sia-connector-prerequisites.sh --config ./sia-connector.env
 ```
+
+Re-runs the checks, then builds, publishes and creates the namespace and secrets — after
+asking you to confirm. See [What it does after the checks](#what-it-does-after-the-checks).
 
 Every parameter also works as a flag; `--help` lists them all, and flags override the
 config file.
 
 ### Flags it does not take
 
-It rejects, with a message telling you why, anything that only affects an install:
-`--release`, `--pull-secret`, `--cluster-name`, `--kubectl-version`, `--base-image`, and
-every form of the password.
+Two, both rejected with a message telling you why:
 
-`--check-only` and `--yes` are accepted and ignored — this script never changes anything and
-never prompts, so both are already true of it.
+- `--release` and `--cluster-name` affect only the Helm release, which this script does not
+  run.
+- `--password` in any form. A password on a command line is visible to every user on the
+  machine through `ps` and stays in your shell history. Use the prompt, `--password-file`, or
+  `SIA_PASSWORD`.
 
 ---
 
@@ -211,6 +236,68 @@ Because this is the only check you cannot perform yourself, it is skipped for as
 as possible: an unreachable cluster, missing or placeholder tenant parameters, no namespace
 it is allowed to create a pod in, or `--skip-egress-check`. An unrelated failure elsewhere
 does not suppress it.
+
+---
+
+## What it does after the checks
+
+Skipped entirely with `--check-only`, and skipped if any check failed. You are asked to
+confirm before the first of these runs.
+
+### 1. Build the connector image
+
+`docker build` for your `--platform`, with `ROOT_DOMAIN`, the base image and the embedded
+kubectl version passed in as build arguments. `--skip-build` skips this and the push, for an
+image you have already published.
+
+### 2. Verify the image before publishing
+
+Runs the freshly built image and asserts that the domain compiled into it matches what you
+asked for, and that its architecture is right. If either is wrong it **aborts without
+publishing**.
+
+This is deliberate: the domain is baked in at build time and cannot be patched afterwards.
+Catching it here costs seconds; catching it later means a rebuild, a re-push and a redeploy.
+
+### 3. Publish it
+
+Authenticates to your registry — `docker login`, or `aws ecr get-login-password` for ECR,
+where the repository is also created if it does not exist — then tags and pushes.
+
+Note that the chart sets `imagePullPolicy=Always`, so moving an existing tag changes what any
+other release using that tag will run after its next restart.
+
+### 4. Ensure the namespace
+
+Created if absent, left alone if present.
+
+### 5. Create the image pull secret
+
+A `dockerconfigjson` secret, named by `--pull-secret` (default `sia-registry-creds`), so the
+cluster can pull the image you just pushed. `--skip-pull-secret` skips it, for a public
+registry or a secret you manage yourself.
+
+### 6. Create the `sia-auth` secret
+
+The connector's own credentials: `username`, `password`, `idaptiveTenantId` and
+`tenantSubdomain`. The connector reads all four as environment variables at start-up, uses
+them to obtain a token from your identity endpoint, and registers itself into the pool. The
+`sia-maintenance` plugin and the chart's pre-delete hook read the same secret later, so it has
+to outlive the release.
+
+This is why the secret belongs here rather than in the release: the chart's
+`pre-install-check` template looks the secret up and **fails the install** if it is missing.
+`helm upgrade --install` cannot succeed until it exists.
+
+Both secrets are written by generating YAML and piping it to `kubectl apply`, rather than
+`kubectl create secret --from-literal`, which would place the credential in `kubectl`'s own
+argv where any local user could read it.
+
+### What is left
+
+Nothing is deployed. The script closes by listing what now exists — namespace, both secrets,
+the published image reference, and the resolved chart and version — and the Helm release
+remains the one outstanding step.
 
 ---
 

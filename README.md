@@ -25,17 +25,19 @@ You also need:
 
 ### Verify all of this automatically
 
-`sia-connector-prerequisites.sh` checks every item above, plus the two things you cannot check from your own machine at all: whether your **cluster nodes** can reach your SIA environment, and whether the cluster has a StorageClass the connector's volume can actually bind to. It **installs nothing**.
+`sia-connector-prerequisites.sh --check-only` checks every item above, plus the two things you cannot check from your own machine at all: whether your **cluster nodes** can reach your SIA environment, and whether the cluster has a StorageClass the connector's volume can actually bind to. In that mode it **changes nothing**.
 
 ```bash
 cp sia-connector.env.example sia-connector.env
 $EDITOR sia-connector.env          # fill in the REQUIRED block
 chmod 600 sia-connector.env
 
-./sia-connector-prerequisites.sh --config ./sia-connector.env
+./sia-connector-prerequisites.sh --config ./sia-connector.env --check-only
 ```
 
-It exits 0 when every check passes and 1 if any of them fails, so it also works as a CI gate. It needs no password, and the only object it creates anywhere is a throwaway connectivity-probe pod, which it deletes again — pass `--skip-egress-check` to avoid even that.
+It exits 0 when every check passes and 1 if any of them fails, so it also works as a CI gate. With `--check-only` it needs no password, and the only object it creates anywhere is a throwaway connectivity-probe pod, which it deletes again — pass `--skip-egress-check` to avoid even that.
+
+**Without `--check-only` it goes further:** after the checks pass and you confirm, it builds the connector image, publishes it to your registry, ensures the namespace, and creates the image pull secret and the `sia-auth` secret — everything the chart needs in place before you install it. It stops short of the Helm release itself.
 
 Run it from the root of your clone and it finds both the chart archive and the connector build context on its own — no `CHART_REF` or `DOCKERFILE_DIR` needed. From anywhere else, pass `--chart-ref` and `--dockerfile-dir`.
 
@@ -360,10 +362,10 @@ kubectl delete namespace sia-k8s-connector
 
 **Re-check the environment first**
 
-Most install-time failures are an environment problem rather than a chart problem — a blocked egress path, no usable StorageClass, an expired registry token, insufficient RBAC. Re-running the prerequisite checks names the cause directly, and changes nothing:
+Most install-time failures are an environment problem rather than a chart problem — a blocked egress path, no usable StorageClass, an expired registry token, insufficient RBAC. Re-running the checks names the cause directly. Keep `--check-only` on, so this changes nothing:
 
 ```bash
-./sia-connector-prerequisites.sh --config ./sia-connector.env
+./sia-connector-prerequisites.sh --config ./sia-connector.env --check-only
 ```
 
 The transcript it writes (`sia-connector-prerequisites-<UTC>.log`, with credential values redacted) is a good thing to attach to a support ticket. Each check is documented in [PREREQUISITES.md](PREREQUISITES.md).
