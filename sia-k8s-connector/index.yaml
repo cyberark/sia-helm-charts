@@ -3,7 +3,18 @@ entries:
   sia-connector:
   - apiVersion: v2
     appVersion: latest
-    created: "2026-08-30T15:56:50.960877+03:00"
+    created: "2026-08-31T16:14:34.738065+03:00"
+    description: CyberArk SIA connector - downloads ephemeral connector binary and
+      config at startup
+    digest: 7166c19a7baed0b15bb893e1de05f5c65df88900ccaa8f855ceee80b46b4f4f5
+    name: sia-connector
+    type: application
+    urls:
+    - https://cyberark.github.io/sia-helm-charts/sia-k8s-connector/sia-connector-1.0.25.tgz
+    version: 1.0.25
+  - apiVersion: v2
+    appVersion: latest
+    created: "2026-08-31T16:14:34.737793+03:00"
     description: CyberArk SIA connector - downloads ephemeral connector binary and
       config at startup
     digest: dee651a992a473c51223ea0aa2b7bd56b6a93f14cba85051388a652a595ebb91
@@ -14,7 +25,7 @@ entries:
     version: 1.0.24
   - apiVersion: v2
     appVersion: latest
-    created: "2026-08-18T10:06:54.1813+03:00"
+    created: "2026-08-31T16:14:34.73751+03:00"
     description: CyberArk SIA connector - downloads ephemeral connector binary and
       config at startup
     digest: 04754371d04f396955b0dad5785e277edd37cd42b62771192a59082e9ad52262
@@ -25,7 +36,7 @@ entries:
     version: 1.0.19
   - apiVersion: v2
     appVersion: latest
-    created: "2026-08-18T10:06:54.180865+03:00"
+    created: "2026-08-31T16:14:34.737155+03:00"
     description: CyberArk SIA connector - downloads ephemeral connector binary and
       config at startup
     digest: 89a3859f8acbb3390927d7fa01d4ed55962d7fdce2b1d58a3fd563199b46bddb
@@ -36,7 +47,7 @@ entries:
     version: 1.0.16
   - apiVersion: v2
     appVersion: latest
-    created: "2026-08-18T10:06:54.180297+03:00"
+    created: "2026-08-31T16:14:34.73609+03:00"
     description: CyberArk SIA connector - downloads ephemeral connector binary and
       config at startup
     digest: c52ee69d5fb523d9d4d060f5152a4e44572f3b5084274e49b229eaf1a4fa7896
@@ -45,4 +56,4 @@ entries:
     urls:
     - https://cyberark.github.io/sia-helm-charts/sia-k8s-connector/sia-connector-1.0.12.tgz
     version: 1.0.12
-generated: "2026-08-30T15:56:50.959233+03:00"
+generated: "2026-08-31T16:14:34.735621+03:00"
