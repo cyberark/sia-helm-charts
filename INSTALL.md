@@ -7,10 +7,11 @@ It is one way to deploy the connector, not the only one — [README.md](README.m
 managing the Helm release directly, which is the better fit for teams that already have their
 own image build and deployment pipeline.
 
-> **Check your environment first.** The prerequisite checks are documented on their own in
-> **[PREREQUISITES.md](PREREQUISITES.md)** — what each one means, and what to do when it
-> fails. They install nothing, need no password, and can be run long before you have
-> credentials or a maintenance window.
+> **Check your environment first.** `sia-connector-prerequisites.sh --check-only` runs every
+> check this installer runs, changing nothing and needing no password, long before you have
+> credentials or a maintenance window. **[PREREQUISITES.md](PREREQUISITES.md)** documents what
+> each check means and what to do when it fails — and note that without `--check-only` that
+> script goes on to build, publish and create the namespace and secrets itself.
 
 This installer re-runs every one of those same checks itself, through the shared
 `sia-connector-common.sh`, and creates nothing until all of them pass. A misconfiguration
@@ -29,16 +30,18 @@ $EDITOR sia-connector.env          # fill in the REQUIRED block
 chmod 600 sia-connector.env
 ```
 
-One file serves both the checks and the install. It deliberately holds no password.
+One file serves the checks and the install alike. It deliberately holds no password.
 
 ### 2. Confirm the environment is ready
 
 ```bash
-./sia-connector-prerequisites.sh --config ./sia-connector.env
+./sia-connector-prerequisites.sh --config ./sia-connector.env --check-only
 ```
 
-Exit status 0 means every check passed. See [PREREQUISITES.md](PREREQUISITES.md) for what
-each check covers and how to act on a failure.
+Exit status 0 means every check passed. Keep `--check-only` on here: without it that script
+also builds, publishes and creates the namespace and secrets, which the installer below does
+for you anyway. See [PREREQUISITES.md](PREREQUISITES.md) for what each check covers and how to
+act on a failure.
 
 ### 3. Install
 
