@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
 # =============================================================================
-# CyberArk SIA Kubernetes Connector — shared prerequisite checks
+# CyberArk SIA Kubernetes Connector — shared library
 #
 # This file is a library, not a command. It is sourced by
-# sia-connector-prerequisites.sh.
+# sia-connector-prerequisites.sh, and by any other script in this distribution
+# that has to validate an environment before acting on it.
 #
-# Everything in here is read-only.
+# Keeping the checks here means there is exactly one copy of each of them, so
+# no two callers can drift apart about what "ready" means.
 # =============================================================================
 
 # Sourced, not executed. Without this guard the file looks like an installer
@@ -39,7 +41,6 @@ CONFIG_FILE=""
 LOG_FILE=""
 DOCKERFILE_DIR=""
 SIA_USERNAME=""
-PROXY_URL=""
 
 # Behaviour
 CHECK_ONLY=false
@@ -75,6 +76,7 @@ warn()     { WARN_COUNT=$((WARN_COUNT+1)); printf '  %s[WARN]%s %-42s %s\n' "${C
 fail()     { FAIL_COUNT=$((FAIL_COUNT+1)); printf '  %s[FAIL]%s %-42s %s\n' "${C_RED}"   "${C_RESET}" "$1" "${2:-}"; }
 skip()     { printf '  %s[SKIP]%s %-42s %s\n' "${C_DIM}" "${C_RESET}" "$1" "${2:-}"; }
 info()     { printf '         %s%s%s\n' "${C_DIM}" "$*" "${C_RESET}"; }
+step()     { printf '\n%s==>%s %s\n' "${C_BLUE}" "${C_RESET}" "$*"; }
 die()      { printf '\n%sERROR:%s %s\n' "${C_RED}" "${C_RESET}" "$*" >&2; exit 1; }
 
 cleanup() {
@@ -97,6 +99,23 @@ ver_ge() {
 
 is_ecr()      { [[ "${REGISTRY}" =~ \.dkr\.ecr\.[a-z0-9-]+\.amazonaws\.com ]]; }
 ecr_region()  { printf '%s' "${REGISTRY}" | sed -E 's/^[0-9]+\.dkr\.ecr\.([a-z0-9-]+)\.amazonaws\.com.*/\1/'; }
+
+make_tmpdir() { TMPDIR_SELF="$(mktemp -d)"; return 0; }
+
+confirm() {
+  local prompt="$1"
+  [[ "${ASSUME_YES}" == "true" ]] && return 0
+  # Open /dev/tty as the only reliable test that a terminal is actually
+  # connected — `[[ -r /dev/tty ]]` passes even in CI pipelines.
+  if ! { true </dev/tty; } 2>/dev/null; then
+    die "cannot prompt for confirmation and --yes was not given.
+       Re-run with --yes, or from a terminal."
+  fi
+  local reply=""
+  read -rp "${prompt} [y/N] " reply </dev/tty || reply=""
+  [[ "${reply}" == "y" || "${reply}" == "Y" ]]
+}
+
 resolve_image_refs() {
   IMAGE_LOCAL="${IMAGE_NAME}:${IMAGE_TAG}"
   [[ -n "${REGISTRY}" ]] && IMAGE_REMOTE="${REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}"
@@ -122,8 +141,8 @@ preparse_config() {
       if grep -qE '^[[:space:]]*(export[[:space:]]+)?SIA_PASSWORD=' "${CONFIG_FILE}"; then
         die "${CONFIG_FILE} assigns SIA_PASSWORD.
        Config files are easy to share or commit by accident, so the password is not
-       read from one. The prerequisite checks need no password at all. Remove that
-       line; a credential is supplied at install time by an interactive prompt, by
+       read from one. With --check-only no password is needed at all. Remove that
+       line; a credential is supplied by an interactive prompt, by
        --password-file <path> (a file only you can read), or by the SIA_PASSWORD
        environment variable for CI."
       fi
@@ -200,7 +219,6 @@ check_parameters() {
   check_required "root domain"        "${ROOT_DOMAIN}"
   check_required "identity tenant ID" "${IDAPTIVE_TENANT_ID}"
   check_required "tenant subdomain"   "${TENANT_SUBDOMAIN}"
-  check_required "service account"    "${SIA_USERNAME}"
   check_required "registry"           "${REGISTRY}"
 
   if [[ -n "${ROOT_DOMAIN}" && ! "${ROOT_DOMAIN}" =~ ^[a-zA-Z0-9]([a-zA-Z0-9.-]*[a-zA-Z0-9])?\.[a-zA-Z]{2,}$ ]]; then
@@ -212,7 +230,6 @@ check_parameters() {
 
   resolve_image_refs
   [[ -n "${IMAGE_REMOTE}" ]] && ok "image reference" "${IMAGE_REMOTE}"
-  [[ -n "${PROXY_URL}" ]] && ok "outbound proxy" "${PROXY_URL}"
   return 0
 }
 
@@ -386,6 +403,45 @@ check_registry() {
   return 0
 }
 
+check_connectivity() {
+  heading "Preflight — SIA endpoint connectivity"
+  local _url="" _code="" _any_blocked=false _v=""
+
+  if [[ -z "${ROOT_DOMAIN}" || -z "${IDAPTIVE_TENANT_ID}" || -z "${TENANT_SUBDOMAIN}" ]]; then
+    skip "connectivity" "tenant parameters incomplete"
+    return 0
+  fi
+  for _v in "${ROOT_DOMAIN}" "${IDAPTIVE_TENANT_ID}" "${TENANT_SUBDOMAIN}"; do
+    if [[ "${_v}" == *'{{'* || "${_v}" == *'<'*'>'* ]]; then
+      skip "connectivity" "tenant parameters still contain placeholders"
+      return 0
+    fi
+  done
+  if ! have curl; then
+    skip "connectivity" "curl not found — see tooling check above"
+    return 0
+  fi
+
+  for _url in \
+    "https://${IDAPTIVE_TENANT_ID}.id.${ROOT_DOMAIN}" \
+    "https://${TENANT_SUBDOMAIN}.dpa.${ROOT_DOMAIN}/api"; do
+    _code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "${_url}" 2>/dev/null || echo '000')"
+    if [[ "${_code}" == "000" ]]; then
+      fail "reachable" "${_url}"
+      info "no HTTP response — DNS, routing or a firewall may be blocking the connection"
+      _any_blocked=true
+    else
+      ok "reachable" "${_url} → HTTP ${_code}"
+    fi
+  done
+
+  if [[ "${_any_blocked}" == "false" ]]; then
+    info "an authenticated endpoint answering 401/403/5xx still proves egress works;"
+    info "the connector supplies credentials when it registers"
+  fi
+  return 0
+}
+
 print_summary() {
   heading "Preflight summary"
   printf '  %s%d passed%s   %s%d warning(s)%s   %s%d failure(s)%s\n' \
@@ -400,6 +456,7 @@ print_summary() {
 run_prerequisite_checks() {
   check_parameters
   check_tooling
+  check_connectivity
   check_cluster
   check_registry
   print_summary
