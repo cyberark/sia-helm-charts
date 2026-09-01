@@ -108,16 +108,6 @@ This matters more than it sounds. Building on an Apple Silicon Mac for x86_64 no
 locally and fails only once the pod tries to start, as `Init:ErrImagePull` / *no match for
 platform in manifest* — an error that gives no hint about its cause.
 
-### Storage
-
-The chart requests a 1Gi volume per replica. If your cluster has no default StorageClass and
-you have not passed `--storage-class`, the volume is created with no class and never binds —
-the pod waits forever with no obvious explanation. So that combination is a **failure**, and
-the message names Amazon EKS Auto Mode as the usual cause.
-
-If the class binds lazily (`WaitForFirstConsumer`), the check says so, because a briefly
-`Pending` volume is then normal rather than a problem.
-
 ### metrics-server
 
 A **warning only**. Without it the chart's HorizontalPodAutoscaler reports `<unknown>`
@@ -127,10 +117,9 @@ HPA with `--set autoscaling.enabled=false`.
 
 ### Registry
 
-For Amazon ECR, verifies that the AWS identity you are authenticated as actually owns the
-account in the registry hostname — an inherited `AWS_PROFILE` pointing at the wrong account
-is easy to miss. It also warns that ECR tokens expire after **12 hours**, which is why a
-cluster that pulled fine this morning can fail this evening.
+For Amazon ECR, verifies that the AWS CLI is present and that your credentials are valid.
+It also warns that ECR tokens expire after **12 hours**, which is why a cluster that pulled
+fine this morning can fail this evening.
 
 ---
 

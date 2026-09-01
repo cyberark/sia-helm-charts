@@ -40,7 +40,6 @@ LOG_FILE=""
 DOCKERFILE_DIR=""
 SIA_USERNAME=""
 PROXY_URL=""
-STORAGE_CLASS=""
 
 # Behaviour
 CHECK_ONLY=false
@@ -97,7 +96,6 @@ ver_ge() {
 }
 
 is_ecr()      { [[ "${REGISTRY}" =~ \.dkr\.ecr\.[a-z0-9-]+\.amazonaws\.com ]]; }
-ecr_account() { printf '%s' "${REGISTRY}" | sed -E 's/^([0-9]+)\.dkr\.ecr\..*/\1/'; }
 ecr_region()  { printf '%s' "${REGISTRY}" | sed -E 's/^[0-9]+\.dkr\.ecr\.([a-z0-9-]+)\.amazonaws\.com.*/\1/'; }
 resolve_image_refs() {
   IMAGE_LOCAL="${IMAGE_NAME}:${IMAGE_TAG}"
@@ -291,7 +289,7 @@ check_tooling() {
 check_cluster() {
   heading "Preflight — cluster"
   local _ctx="" _srv="" _perm_fail=false _verb="" _res="" _scope="" _allowed=""
-  local _want_arch="" _arches="" _default_sc="" _binding=""
+  local _want_arch="" _arches=""
 
   if ! kubectl version -o json >/dev/null 2>&1 && ! kubectl cluster-info >/dev/null 2>&1; then
     fail "cluster reachable" "kubectl cannot reach the API server"
@@ -341,27 +339,6 @@ PERMS
     info "rebuild with: --platform linux/${_arches%% *}"
   fi
 
-  # Storage. Without a default class and without an explicit one, the PVC is
-  # created with no storageClassName and never binds.
-  _default_sc="$(kubectl get storageclass -o jsonpath='{range .items[?(@.metadata.annotations.storageclass\.kubernetes\.io/is-default-class=="true")]}{.metadata.name}{"\n"}{end}' 2>/dev/null | head -1)"
-  if [[ -n "${STORAGE_CLASS}" ]]; then
-    if kubectl get storageclass "${STORAGE_CLASS}" >/dev/null 2>&1; then
-      ok "storage class" "${STORAGE_CLASS} (explicit)"
-      _binding="$(kubectl get storageclass "${STORAGE_CLASS}" -o jsonpath='{.volumeBindingMode}' 2>/dev/null)"
-      [[ "${_binding}" == "WaitForFirstConsumer" ]] && info "WaitForFirstConsumer: a briefly Pending PVC is normal, not a failure"
-    else
-      warn "storage class" "'${STORAGE_CLASS}' not present — the chart will try to create it"
-    fi
-  elif [[ -n "${_default_sc}" ]]; then
-    ok "storage class" "cluster default: ${_default_sc}"
-    _binding="$(kubectl get storageclass "${_default_sc}" -o jsonpath='{.volumeBindingMode}' 2>/dev/null)"
-    [[ "${_binding}" == "WaitForFirstConsumer" ]] && info "WaitForFirstConsumer: a briefly Pending PVC is normal, not a failure"
-  else
-    fail "storage class" "no default StorageClass and --storage-class not given"
-    info "the connector's PVC would never bind. Common on EKS Auto Mode, where you want:"
-    info "  --storage-class gp3-auto"
-  fi
-
   # Advisory only.
   if kubectl get apiservices 2>/dev/null | grep -q 'metrics\.k8s\.io'; then
     ok "metrics-server" "present — autoscaling metrics available"
@@ -376,36 +353,25 @@ PERMS
 
 check_registry() {
   heading "Preflight — registry"
-  local _acct="" _rgn="" _who=""
 
   if [[ "${SKIP_BUILD}" == "true" && "${SKIP_PULL_SECRET}" == "true" ]]; then
     skip "registry auth" "--skip-build and --skip-pull-secret given"
   elif [[ -z "${REGISTRY}" ]]; then
-    # check_required has already failed this parameter. Advising "docker login"
-    # with no host would put a command nobody can run into a transcript people
-    # are told to attach to support tickets.
     skip "registry auth" "no registry set — see the failure above"
   elif is_ecr; then
-    _acct="$(ecr_account)"; _rgn="$(ecr_region)"
     if ! have aws; then
       fail "registry auth" "aws cli required for ECR"
+    elif ! aws sts get-caller-identity >/dev/null 2>&1; then
+      fail "aws credentials" "not authenticated — try 'aws sso login'"
     else
-      _who="$(aws sts get-caller-identity --query Account --output text 2>/dev/null || echo '')"
-      if [[ -z "${_who}" ]]; then
-        fail "aws credentials" "not authenticated — try 'aws sso login'"
-      elif [[ "${_who}" != "${_acct}" ]]; then
-        fail "aws account" "authenticated as ${_who}, but the registry belongs to ${_acct}"
-        info "check AWS_PROFILE — it is easy to inherit one that targets a different account"
+      ok "aws credentials" "authenticated"
+      if aws ecr describe-repositories --repository-names "${IMAGE_NAME}" --region "$(ecr_region)" >/dev/null 2>&1; then
+        ok "ecr repository" "${IMAGE_NAME} exists in $(ecr_region)"
       else
-        ok "aws account" "${_who} matches the registry"
-        if aws ecr describe-repositories --repository-names "${IMAGE_NAME}" --region "${_rgn}" >/dev/null 2>&1; then
-          ok "ecr repository" "${IMAGE_NAME} exists in ${_rgn}"
-        else
-          warn "ecr repository" "${IMAGE_NAME} absent in ${_rgn} — it will be created"
-        fi
-        info "ECR authorisation tokens expire after 12 hours; the pull secret must be"
-        info "recreated if the cluster stops being able to pull later on"
+        warn "ecr repository" "${IMAGE_NAME} absent — it will be created on push"
       fi
+      info "ECR authorisation tokens expire after 12 hours; the pull secret must be"
+      info "recreated if the cluster stops being able to pull later on"
     fi
   elif [[ -n "${REGISTRY_USERNAME}" ]]; then
     if [[ -n "${REGISTRY_PASSWORD_FILE}" && -f "${REGISTRY_PASSWORD_FILE}" ]]; then
