@@ -12,6 +12,9 @@ sia-connector-prerequisites-*.log
 sia-password
 registry-token
 
+# Local test runs
+tests/
+
 # IDE
 .idea/
 .DS_Store
