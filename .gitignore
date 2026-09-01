@@ -7,8 +7,10 @@ sia-connector.env
 # redacted, and safe to attach to a support ticket — but they are a record of one
 # run on one machine, not repository content.
 sia-connector-prerequisites-*.log
-sia-connector-install-*.log
 
 # Credential files the docs suggest creating, in case one outlives its `shred`.
 sia-password
 registry-token
+
+# IDE
+.idea/

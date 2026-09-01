@@ -62,7 +62,7 @@ helm show chart ./sia-k8s-connector/sia-connector-<version>.tgz
 ### 1. Fill in the parameters
 
 ```bash
-cp sia-connector.env.example sia-connector.env
+cp scripts/sia-connector.env.example sia-connector.env
 $EDITOR sia-connector.env          # fill in the REQUIRED block
 chmod 600 sia-connector.env
 ```
@@ -80,7 +80,7 @@ grep -vE '^\s*(#|$)' sia-connector.env
 ### 2. Run
 
 ```bash
-./sia-connector-prerequisites.sh --config ./sia-connector.env
+./scripts/sia-connector-prerequisites.sh --config ./sia-connector.env
 ```
 
 Every parameter also works as a flag; `--help` lists them all, and flags override the

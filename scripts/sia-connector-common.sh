@@ -3,92 +3,61 @@
 # CyberArk SIA Kubernetes Connector — shared prerequisite checks
 #
 # This file is a library, not a command. It is sourced by
-# sia-connector-prerequisites.sh, and by any other script in this distribution
-# that has to validate an environment before acting on it.
+# sia-connector-prerequisites.sh.
 #
-# Keeping the checks here means there is exactly one copy of each of them, so no
-# two callers can drift apart about what "ready" means.
-#
-# Everything in here is read-only with a single exception: check_egress creates
-# a short-lived probe pod, because node egress is the one thing that cannot be
-# tested from the machine running the script. It is removed again on exit,
-# including on Ctrl-C.
+# Everything in here is read-only.
 # =============================================================================
 
 # Sourced, not executed. Without this guard the file looks like an installer
 # that silently does nothing, which is a confusing thing to hand a customer.
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
   printf 'sia-connector-common.sh is a library, not a command.\n' >&2
-  printf 'Run ./sia-connector-prerequisites.sh instead.\n' >&2
+  printf 'Run ./scripts/sia-connector-prerequisites.sh instead.\n' >&2
   exit 64
 fi
 
 SIA_TOOLS_VERSION="1.1.0"
 
 # ---------------------------------------------------------------------------
-# Defaults — only parameters the checks actually use. Anything needed solely
-# to install (release name, pull secret, build arguments) is defaulted by
-# whichever script performs the install.
+# Defaults — only parameters the checks actually use.
 # ---------------------------------------------------------------------------
 NAMESPACE="sia-k8s-connector"
-REPLICAS="1"
 IMAGE_NAME="cms-k8s-connector"
 IMAGE_TAG="latest"
 PLATFORM="linux/amd64"
-CHART_NAME="sia-connector"
-CHART_REPO_NAME="sia-helm-charts"
-# No default. The chart ships in this distribution alongside the scripts, so it
-# is located in the working copy by resolve_chart_ref — the same way the
-# connector build context is. Pass --chart-ref to override with either another
-# archive or a Helm repository URL.
-CHART_REF=""
 
 # Required — no defaults
-ROOT_DOMAIN=""
+ROOT_DOMAIN="cyberark.cloud"
 IDAPTIVE_TENANT_ID=""
 TENANT_SUBDOMAIN=""
-CONNECTOR_POOL_ID=""
-SIA_USERNAME=""
 REGISTRY=""
 
 # Optional — empty means "not set"
-CHART_VERSION=""
-STORAGE_CLASS=""
-PROXY_URL=""
 REGISTRY_USERNAME=""
 REGISTRY_PASSWORD_FILE=""
 CONFIG_FILE=""
 LOG_FILE=""
 DOCKERFILE_DIR=""
+SIA_USERNAME=""
+PROXY_URL=""
+STORAGE_CLASS=""
 
 # Behaviour
 CHECK_ONLY=false
 SKIP_BUILD=false
 SKIP_PULL_SECRET=false
-SKIP_EGRESS_CHECK=false
 ASSUME_YES=false
-
-# The checks never authenticate, so a password is not a prerequisite. A caller
-# that goes on to create the Secret sets this to true so check_parameters
-# reports on the credential it is about to store; the prerequisite checks leave
-# it false and no password line is printed at all.
-WANT_PASSWORD=false
 
 # Derived during the checks
 IMAGE_LOCAL=""
 IMAGE_REMOTE=""
-CHART_INSTALL_REF=""
-CHART_REF_AUTO=false
 
 # Internal state
 PASS_COUNT=0
 WARN_COUNT=0
 FAIL_COUNT=0
 TMPDIR_SELF=""
-EGRESS_POD=""
-EGRESS_POD_NS=""
 ARG_SHIFT=0
-CLUSTER_REACHABLE=false
 
 # ---------------------------------------------------------------------------
 # Output helpers
@@ -107,15 +76,10 @@ warn()     { WARN_COUNT=$((WARN_COUNT+1)); printf '  %s[WARN]%s %-42s %s\n' "${C
 fail()     { FAIL_COUNT=$((FAIL_COUNT+1)); printf '  %s[FAIL]%s %-42s %s\n' "${C_RED}"   "${C_RESET}" "$1" "${2:-}"; }
 skip()     { printf '  %s[SKIP]%s %-42s %s\n' "${C_DIM}" "${C_RESET}" "$1" "${2:-}"; }
 info()     { printf '         %s%s%s\n' "${C_DIM}" "$*" "${C_RESET}"; }
-step()     { printf '\n%s==>%s %s\n' "${C_BLUE}" "${C_RESET}" "$*"; }
 die()      { printf '\n%sERROR:%s %s\n' "${C_RED}" "${C_RESET}" "$*" >&2; exit 1; }
 
 cleanup() {
   local rc=$?
-  if [[ -n "${EGRESS_POD}" && -n "${EGRESS_POD_NS}" ]]; then
-    kubectl delete pod "${EGRESS_POD}" -n "${EGRESS_POD_NS}" --ignore-not-found \
-      --wait=false >/dev/null 2>&1 || true
-  fi
   [[ -n "${TMPDIR_SELF}" && -d "${TMPDIR_SELF}" ]] && rm -rf "${TMPDIR_SELF}"
   return $rc
 }
@@ -132,46 +96,12 @@ ver_ge() {
   [[ "$(printf '%s\n%s\n' "$b" "$a" | sort -V | head -1)" == "$b" ]]
 }
 
-confirm() {
-  local prompt="$1"
-  [[ "${ASSUME_YES}" == "true" ]] && return 0
-  [[ -r /dev/tty ]] || die "cannot prompt for confirmation and --yes was not given."
-  local reply
-  read -rp "${prompt} [y/N] " reply </dev/tty
-  [[ "${reply}" == "y" || "${reply}" == "Y" ]]
-}
-
 is_ecr()      { [[ "${REGISTRY}" =~ \.dkr\.ecr\.[a-z0-9-]+\.amazonaws\.com ]]; }
 ecr_account() { printf '%s' "${REGISTRY}" | sed -E 's/^([0-9]+)\.dkr\.ecr\..*/\1/'; }
 ecr_region()  { printf '%s' "${REGISTRY}" | sed -E 's/^[0-9]+\.dkr\.ecr\.([a-z0-9-]+)\.amazonaws\.com.*/\1/'; }
-chart_is_file() { [[ "${CHART_REF}" == *.tgz ]]; }
-
-make_tmpdir() { TMPDIR_SELF="$(mktemp -d)"; return 0; }
-
 resolve_image_refs() {
   IMAGE_LOCAL="${IMAGE_NAME}:${IMAGE_TAG}"
   [[ -n "${REGISTRY}" ]] && IMAGE_REMOTE="${REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}"
-  return 0
-}
-
-# The chart is delivered in this distribution, so find it the way the Dockerfile
-# is found rather than fetching it over the network. A working copy can hold
-# several versions; take the newest by version order, not by filename order,
-# which would put 1.0.9 above 1.0.24.
-resolve_chart_ref() {
-  local _d="" _list="" _found=""
-  [[ -n "${CHART_REF}" ]] && return 0
-  for _d in "./sia-k8s-connector" "../sia-k8s-connector" "."; do
-    _list="$(printf '%s\n' "${_d}"/${CHART_NAME}-*.tgz)"
-    # A glob that matches nothing comes back as the literal pattern.
-    [[ "${_list}" == *'*'* ]] && continue
-    _found="$(printf '%s\n' "${_list}" | sort -V | tail -1)"
-    if [[ -n "${_found}" && -f "${_found}" ]]; then
-      CHART_REF="${_found}"
-      CHART_REF_AUTO=true
-      return 0
-    fi
-  done
   return 0
 }
 
@@ -215,26 +145,18 @@ common_parse_arg() {
     --root-domain)            ROOT_DOMAIN="${2:?}" ;;
     --idaptive-tenant-id)     IDAPTIVE_TENANT_ID="${2:?}" ;;
     --tenant-subdomain)       TENANT_SUBDOMAIN="${2:?}" ;;
-    --connector-pool-id)      CONNECTOR_POOL_ID="${2:?}" ;;
-    --username)               SIA_USERNAME="${2:?}" ;;
     --registry)               REGISTRY="${2:?}" ;;
     --namespace)              NAMESPACE="${2:?}" ;;
-    --replicas)               REPLICAS="${2:?}" ;;
     --image-name)             IMAGE_NAME="${2:?}" ;;
     --image-tag)              IMAGE_TAG="${2:?}" ;;
-    --chart-ref)              CHART_REF="${2:?}" ;;
-    --chart-version)          CHART_VERSION="${2:?}" ;;
     --registry-username)      REGISTRY_USERNAME="${2:?}" ;;
     --registry-password-file) REGISTRY_PASSWORD_FILE="${2:?}" ;;
-    --storage-class)          STORAGE_CLASS="${2:?}" ;;
-    --proxy)                  PROXY_URL="${2:?}" ;;
     --platform)               PLATFORM="${2:?}" ;;
     --dockerfile-dir)         DOCKERFILE_DIR="${2:?}" ;;
     --log-file)               LOG_FILE="${2:?}" ;;
     --config)                 : ;;   # already consumed by preparse_config
     --skip-build)             SKIP_BUILD=true;        ARG_SHIFT=1 ;;
     --skip-pull-secret)       SKIP_PULL_SECRET=true;  ARG_SHIFT=1 ;;
-    --skip-egress-check)      SKIP_EGRESS_CHECK=true; ARG_SHIFT=1 ;;
     *)                        ARG_SHIFT=0; return 1 ;;
   esac
   return 0
@@ -280,7 +202,6 @@ check_parameters() {
   check_required "root domain"        "${ROOT_DOMAIN}"
   check_required "identity tenant ID" "${IDAPTIVE_TENANT_ID}"
   check_required "tenant subdomain"   "${TENANT_SUBDOMAIN}"
-  check_required "connector pool ID"  "${CONNECTOR_POOL_ID}"
   check_required "service account"    "${SIA_USERNAME}"
   check_required "registry"           "${REGISTRY}"
 
@@ -289,23 +210,6 @@ check_parameters() {
   elif [[ -n "${ROOT_DOMAIN}" ]]; then
     ok "root domain format" "identity: ${IDAPTIVE_TENANT_ID}.id.${ROOT_DOMAIN}"
     info "api:      ${TENANT_SUBDOMAIN}.dpa.${ROOT_DOMAIN}/api"
-  fi
-
-  if [[ ! "${REPLICAS}" =~ ^[0-9]+$ ]] || (( REPLICAS < 1 )); then
-    fail "replicas" "must be a positive integer, got '${REPLICAS}'"
-  else
-    ok "replicas" "${REPLICAS}"
-  fi
-
-  if [[ "${WANT_PASSWORD}" == "true" ]]; then
-    local _pw="${SIA_PASSWORD:-}"
-    if [[ "${CHECK_ONLY}" == "true" && -z "${_pw}" ]]; then
-      skip "password" "not required for --check-only"
-    elif [[ -z "${_pw}" ]]; then
-      fail "password" "empty"
-    else
-      ok "password" "supplied (${#_pw} characters, not shown)"
-    fi
   fi
 
   resolve_image_refs
@@ -387,7 +291,7 @@ check_tooling() {
 check_cluster() {
   heading "Preflight — cluster"
   local _ctx="" _srv="" _perm_fail=false _verb="" _res="" _scope="" _allowed=""
-  local _want_arch="" _arches="" _default_sc="" _binding="" _existing=""
+  local _want_arch="" _arches="" _default_sc="" _binding=""
 
   if ! kubectl version -o json >/dev/null 2>&1 && ! kubectl cluster-info >/dev/null 2>&1; then
     fail "cluster reachable" "kubectl cannot reach the API server"
@@ -400,7 +304,6 @@ check_cluster() {
   _srv="$(kubectl version -o json 2>/dev/null \
            | sed -n 's/.*"gitVersion": *"v\([0-9.]*\)".*/\1/p' | tail -1)"
   ok "cluster reachable" "server v${_srv:-?}"
-  CLUSTER_REACHABLE=true
   printf '         %sTARGET CLUSTER: %s%s%s\n' "${C_DIM}" "${C_BOLD}" "${_ctx}" "${C_RESET}"
   if [[ -n "${_srv}" ]] && ! ver_ge "${_srv}" "1.24"; then
     fail "kubernetes version" "v${_srv} — 1.24 or newer required"
@@ -468,83 +371,6 @@ PERMS
     info "  --set autoscaling.enabled=false  (see README)"
   fi
 
-  # Existing release in the target namespace.
-  _existing="$(helm list -n "${NAMESPACE}" -o json 2>/dev/null \
-                | tr ',' '\n' | sed -n 's/.*"chart":"'"${CHART_NAME}"'-\([0-9][0-9.]*\)".*/\1/p' | head -1)"
-  if [[ -z "${_existing}" ]]; then
-    ok "existing release" "none in ${NAMESPACE} — this is a fresh install"
-  else
-    if [[ -n "${CHART_VERSION}" && "${_existing}" == "${CHART_VERSION}" ]]; then
-      warn "existing release" "${CHART_NAME}-${_existing} already installed — this reinstalls it"
-    elif [[ -n "${CHART_VERSION}" ]] && ver_ge "${CHART_VERSION}" "${_existing}"; then
-      ok "existing release" "${CHART_NAME}-${_existing} → ${CHART_VERSION} (upgrade)"
-    elif [[ -n "${CHART_VERSION}" ]]; then
-      warn "existing release" "${CHART_NAME}-${_existing} → ${CHART_VERSION} is a DOWNGRADE"
-    else
-      warn "existing release" "${CHART_NAME}-${_existing} installed; target version not pinned"
-    fi
-  fi
-  return 0
-}
-
-check_chart_source() {
-  heading "Preflight — chart source"
-  local _cv="" _versions=""
-
-  resolve_chart_ref
-
-  if [[ -z "${CHART_REF}" ]]; then
-    fail "chart source" "no chart archive found, and --chart-ref was not given"
-    info "the chart ships in this distribution as sia-k8s-connector/${CHART_NAME}-<version>.tgz."
-    info "Either run this script from the root of your working copy, so it is found"
-    info "automatically, or name it explicitly:"
-    info "  --chart-ref ./sia-k8s-connector/${CHART_NAME}-<version>.tgz"
-    info "A Helm repository URL also works, if you publish the chart internally."
-    return 0
-  fi
-
-  if chart_is_file; then
-    if [[ -f "${CHART_REF}" ]] && helm show chart "${CHART_REF}" >/dev/null 2>&1; then
-      _cv="$(helm show chart "${CHART_REF}" 2>/dev/null | sed -n 's/^version: *//p' | head -1)"
-      ok "chart archive" "${CHART_REF} (version ${_cv})"
-      [[ "${CHART_REF_AUTO}" == "true" ]] && info "found in this distribution; --chart-ref selects a different one"
-      CHART_INSTALL_REF="${CHART_REF}"
-      [[ -z "${CHART_VERSION}" ]] && CHART_VERSION="${_cv}"
-    else
-      fail "chart archive" "not found or not a valid chart: ${CHART_REF}"
-    fi
-  else
-    if helm repo add "${CHART_REPO_NAME}" "${CHART_REF}" --force-update >/dev/null 2>&1 \
-       && helm repo update "${CHART_REPO_NAME}" >/dev/null 2>&1; then
-      _versions="$(helm search repo "${CHART_REPO_NAME}/${CHART_NAME}" --versions 2>/dev/null \
-                    | awk 'NR>1 {print $2}' | tr '\n' ' ')"
-      if [[ -z "${_versions}" ]]; then
-        fail "chart repository" "reachable but contains no ${CHART_NAME} chart"
-      else
-        ok "chart repository" "${CHART_REF}"
-        info "available versions: ${_versions}"
-        if [[ -z "${CHART_VERSION}" ]]; then
-          CHART_VERSION="${_versions%% *}"
-          info "no --chart-version given; using newest: ${CHART_VERSION}"
-        elif [[ " ${_versions} " != *" ${CHART_VERSION} "* ]]; then
-          fail "chart version" "${CHART_VERSION} not available in this repository"
-        fi
-        CHART_INSTALL_REF="${CHART_REPO_NAME}/${CHART_NAME}"
-      fi
-    else
-      fail "chart repository" "cannot read an index from ${CHART_REF}"
-      info "a Helm repository must serve index.yaml at the URL you provide. Likely causes:"
-      info "  * this machine cannot reach the URL — a proxy or egress firewall is the"
-      info "    usual cause in a corporate network. Check with: curl -sI <url>index.yaml"
-      info "  * the URL points one level above the directory holding index.yaml"
-      info "  * the repository requires credentials this machine does not have"
-      info "The reliable path is the chart archive that ships in this distribution:"
-      info "  --chart-ref ./sia-k8s-connector/${CHART_NAME}-<version>.tgz"
-      info "Leaving --chart-ref off entirely finds it automatically when you run this"
-      info "from the root of your working copy."
-      info "Verify an archive before using it:  helm show chart <file>.tgz"
-    fi
-  fi
   return 0
 }
 
@@ -594,98 +420,6 @@ check_registry() {
   return 0
 }
 
-# Egress probe. Node egress cannot be tested from this machine, and a blocked
-# network is a common cause of an install that looks fine until registration.
-check_egress() {
-  heading "Preflight — connectivity from inside the cluster"
-  local _probe_ns="" _proxy_arg="" _script="" _out="" _blocked=false _seen="" _url="" _code=""
-  local _v=""
-
-  if [[ "${SKIP_EGRESS_CHECK}" == "true" ]]; then
-    skip "egress probe" "--skip-egress-check given"
-    return 0
-  fi
-  # This probe needs a reachable cluster and well-formed tenant parameters, and
-  # nothing else. Gating it on the total failure count instead would throw away
-  # the one check that cannot be run from this machine whenever something
-  # unrelated — a chart reference, a registry credential — happened to be wrong,
-  # which is exactly when an answer about egress is most worth having.
-  if [[ "${CLUSTER_REACHABLE}" != "true" ]]; then
-    skip "egress probe" "cluster unreachable; not creating a probe pod"
-    return 0
-  fi
-  if [[ -z "${ROOT_DOMAIN}" || -z "${IDAPTIVE_TENANT_ID}" || -z "${TENANT_SUBDOMAIN}" ]]; then
-    skip "egress probe" "tenant parameters incomplete"
-    return 0
-  fi
-  # A placeholder would resolve to nothing and report as blocked egress, sending
-  # someone to their network team over an unedited config file.
-  for _v in "${ROOT_DOMAIN}" "${IDAPTIVE_TENANT_ID}" "${TENANT_SUBDOMAIN}"; do
-    if [[ "${_v}" == *'{{'* || "${_v}" == *'<'*'>'* ]]; then
-      skip "egress probe" "tenant parameters still contain placeholders"
-      return 0
-    fi
-  done
-
-  # The checks must not create anything that outlives them, so the probe runs
-  # in a namespace that already exists: the target if present, else "default".
-  if kubectl get namespace "${NAMESPACE}" >/dev/null 2>&1; then
-    _probe_ns="${NAMESPACE}"
-  elif kubectl get namespace default >/dev/null 2>&1 \
-       && [[ "$(kubectl auth can-i create pods -n default 2>/dev/null || echo no)" == "yes" ]]; then
-    _probe_ns="default"
-    info "target namespace does not exist yet; probing from 'default' instead"
-  fi
-
-  if [[ -z "${_probe_ns}" ]]; then
-    skip "egress probe" "no existing namespace available to run a probe pod in"
-    return 0
-  fi
-
-  EGRESS_POD="sia-egress-check-$$"
-  EGRESS_POD_NS="${_probe_ns}"
-  [[ -n "${PROXY_URL}" ]] && _proxy_arg="--proxy ${PROXY_URL}"
-  _script="for u in https://${IDAPTIVE_TENANT_ID}.id.${ROOT_DOMAIN} https://${TENANT_SUBDOMAIN}.dpa.${ROOT_DOMAIN}/api; do \
-             printf '%s ' \"\$u\"; \
-             curl -s -o /dev/null -w '%{http_code}\n' --max-time 15 ${_proxy_arg} \"\$u\" || echo 000; \
-           done"
-  if _out="$(kubectl run "${EGRESS_POD}" -n "${_probe_ns}" --image=curlimages/curl:latest \
-              --restart=Never --rm -i --quiet --command -- sh -c "${_script}" 2>/dev/null)"; then
-    EGRESS_POD=""
-    while read -r _url _code; do
-      [[ -z "${_url}" ]] && continue
-      # "kubectl run -i" sometimes replays a finished pod's output, so an
-      # endpoint can appear more than once. Duplicates are always whole lines,
-      # so reporting the first result per URL is sufficient — and avoids an
-      # inflated preflight count.
-      case " ${_seen} " in *" ${_url} "*) continue ;; esac
-      _seen="${_seen} ${_url}"
-      # Any HTTP status proves the connection succeeded. These endpoints require
-      # authentication, so 401/403 — and even 5xx — mean egress is fine. Only a
-      # curl failure (000) indicates DNS, routing or a firewall blocking the way.
-      if [[ "${_code}" == "000" ]]; then
-        warn "no response" "${_url}"
-        _blocked=true
-      else
-        ok "reachable" "${_url} → HTTP ${_code}"
-      fi
-    done <<< "${_out}"
-    if [[ "${_blocked}" == "true" ]]; then
-      info "no HTTP response at all means DNS, routing or a firewall is in the way —"
-      info "the connector will not be able to register. Share this with your network"
-      info "team, and add --proxy <url> if outbound traffic requires a proxy."
-    else
-      info "an authenticated endpoint answering 401/403/5xx still proves egress works;"
-      info "the connector supplies credentials when it registers"
-    fi
-  else
-    EGRESS_POD=""
-    warn "egress probe" "could not run a probe pod in '${_probe_ns}'"
-    info "not conclusive — the install may still succeed. Skip with --skip-egress-check."
-  fi
-  return 0
-}
-
 print_summary() {
   heading "Preflight summary"
   printf '  %s%d passed%s   %s%d warning(s)%s   %s%d failure(s)%s\n' \
@@ -701,9 +435,7 @@ run_prerequisite_checks() {
   check_parameters
   check_tooling
   check_cluster
-  check_chart_source
   check_registry
-  check_egress
   print_summary
   return 0
 }
