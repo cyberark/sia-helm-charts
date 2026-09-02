@@ -40,7 +40,6 @@ REGISTRY_PASSWORD_FILE=""
 CONFIG_FILE=""
 LOG_FILE=""
 DOCKERFILE_DIR=""
-SIA_USERNAME=""
 
 # Behaviour
 CHECK_ONLY=false
@@ -136,16 +135,6 @@ preparse_config() {
       CONFIG_FILE="${_args[i+1]:-}"
       [[ -n "${CONFIG_FILE}" ]] || die "--config needs a path"
       [[ -f "${CONFIG_FILE}" ]] || die "config file not found: ${CONFIG_FILE}"
-      # Config files get copied, shared and committed. Keep the promise that this
-      # one never holds the credential, rather than silently honouring it.
-      if grep -qE '^[[:space:]]*(export[[:space:]]+)?SIA_PASSWORD=' "${CONFIG_FILE}"; then
-        die "${CONFIG_FILE} assigns SIA_PASSWORD.
-       Config files are easy to share or commit by accident, so the password is not
-       read from one. With --check-only no password is needed at all. Remove that
-       line; a credential is supplied by an interactive prompt, by
-       --password-file <path> (a file only you can read), or by the SIA_PASSWORD
-       environment variable for CI."
-      fi
       # shellcheck disable=SC1090
       set -a; source "${CONFIG_FILE}"; set +a
     fi
@@ -356,6 +345,13 @@ PERMS
     info "rebuild with: --platform linux/${_arches%% *}"
   fi
 
+  # Namespace.
+  if kubectl get namespace "${NAMESPACE}" >/dev/null 2>&1; then
+    ok "namespace" "${NAMESPACE} already exists"
+  else
+    warn "namespace" "${NAMESPACE} does not exist — will be created"
+  fi
+
   # Advisory only.
   if kubectl get apiservices 2>/dev/null | grep -q 'metrics\.k8s\.io'; then
     ok "metrics-server" "present — autoscaling metrics available"
@@ -425,7 +421,7 @@ check_connectivity() {
   for _url in \
     "https://${IDAPTIVE_TENANT_ID}.id.${ROOT_DOMAIN}" \
     "https://${TENANT_SUBDOMAIN}.dpa.${ROOT_DOMAIN}/api"; do
-    _code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "${_url}" 2>/dev/null || echo '000')"
+    _code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "${_url}" 2>/dev/null; true)"
     if [[ "${_code}" == "000" ]]; then
       fail "reachable" "${_url}"
       info "no HTTP response — DNS, routing or a firewall may be blocking the connection"

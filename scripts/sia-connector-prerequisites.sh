@@ -13,11 +13,10 @@
 #   3. verifies the built image, then publishes it to your registry
 #   4. ensures the namespace
 #   5. creates the image pull secret
-#   6. creates the sia-auth secret
 #
 # It does NOT run `helm upgrade --install`. That one step is left to you.
 #
-# Use --check-only for phase 1 alone (changes nothing, no password needed).
+# Use --check-only for phase 1 alone (changes nothing).
 #
 # See docs/prerequisites.md for what each check means and how to act on it.
 # =============================================================================
@@ -42,11 +41,8 @@ source "${_COMMON}"
 # in sia-connector-common.sh.
 # ---------------------------------------------------------------------------
 PULL_SECRET="sia-registry-creds"
-SECRET_NAME="sia-auth"
 KUBECTL_VERSION="v1.30.0"
-BASE_IMAGE="alpine:latest"
-PASSWORD_FILE=""
-SIA_PASSWORD="${SIA_PASSWORD:-}"
+BASE_IMAGE=""
 
 usage() {
   cat <<'EOF'
@@ -66,9 +62,8 @@ Tenant parameters (from the SIA Admin Portal)
   --root-domain <domain>          Your SIA environment domain (e.g. cyberark.cloud)
   --idaptive-tenant-id <id>       Identity tenant ID
   --tenant-subdomain <name>       Your tenant subdomain
-  --username <user>               Service-account username (written into sia-auth secret)
 
-Your infrastructure
+Infrastructure
   --registry <host[/path]>        Your container registry
   --registry-username <user>      For registries needing docker login
   --registry-password-file <path> Password/token file for the above
@@ -79,13 +74,9 @@ Your infrastructure
   --platform <os/arch>            Default: linux/amd64; checked against your nodes
   --dockerfile-dir <path>         Directory holding the connector Dockerfile
   --kubectl-version <ver>         kubectl embedded in the image; default: v1.30.0
-  --base-image <ref>              Image base layer; default: alpine:latest
+  --base-image <ref>              Image base layer; required
   --config <path>                 Read any of the above as KEY=value
   --log-file <path>               Default: ./sia-connector-prerequisites-<timestamp>.log
-
-Password (never accepted as a flag value)
-  Needed only for the sia-auth secret (phase 2). Supply via SIA_PASSWORD env var,
-  --password-file <path>, or the interactive masked prompt. Not required with --check-only.
 
 Behaviour
   --check-only                    Run the checks only; change nothing
@@ -101,26 +92,32 @@ EOF
 # ---------------------------------------------------------------------------
 preparse_config "$@"
 
+# If --config was not given, fall back to sia-connector.env in the current
+# directory. Fail immediately if that file also does not exist.
+if [[ -z "${CONFIG_FILE}" ]]; then
+  if [[ -f "./sia-connector.env" ]]; then
+    CONFIG_FILE="./sia-connector.env"
+    set -a; source "${CONFIG_FILE}"; set +a
+  else
+    die "no --config given and ./sia-connector.env not found."
+  fi
+fi
+
 while [[ $# -gt 0 ]]; do
   if common_parse_arg "$@"; then
     shift "${ARG_SHIFT}"
     continue
   fi
   case "$1" in
-    --username)               SIA_USERNAME="${2:?}"; shift 2 ;;
     --pull-secret)            PULL_SECRET="${2:?}"; shift 2 ;;
     --kubectl-version)        KUBECTL_VERSION="${2:?}"; shift 2 ;;
     --base-image)             BASE_IMAGE="${2:?}"; shift 2 ;;
-    --password-file)          PASSWORD_FILE="${2:?}"; shift 2 ;;
     --check-only)             CHECK_ONLY=true; shift ;;
     --yes|-y)                 ASSUME_YES=true; shift ;;
     -h|--help)                usage; exit 0 ;;
     --release|--cluster-name)
       die "$1 affects the Helm release, which this script does not run.
        Pass it to whichever step performs the release." ;;
-    --password|--password=*)
-      die "--password is not accepted: it would be visible in 'ps' and your shell history.
-       Use SIA_PASSWORD, --password-file <path>, or the interactive prompt." ;;
     *) die "unknown argument: $1  (try --help)" ;;
   esac
 done
@@ -130,25 +127,6 @@ make_tmpdir
 
 log "${C_BOLD}CyberArk SIA Kubernetes Connector — prerequisites v${SIA_TOOLS_VERSION}${C_RESET}"
 log "${C_DIM}$(date -u +'%Y-%m-%dT%H:%M:%SZ')  ·  transcript: ${LOG_FILE}${C_RESET}"
-
-# ---------------------------------------------------------------------------
-# Resolve the password before the checks (not needed for --check-only).
-# ---------------------------------------------------------------------------
-if [[ -z "${SIA_PASSWORD}" && -n "${PASSWORD_FILE}" ]]; then
-  [[ -f "${PASSWORD_FILE}" ]] || die "password file not found: ${PASSWORD_FILE}"
-  SIA_PASSWORD="$(<"${PASSWORD_FILE}")"
-  SIA_PASSWORD="${SIA_PASSWORD%%$'\n'*}"
-fi
-if [[ -z "${SIA_PASSWORD}" && "${CHECK_ONLY}" == "false" ]]; then
-  if [[ "${ASSUME_YES}" == "true" ]]; then
-    die "no password supplied. Set SIA_PASSWORD or use --password-file (--yes disables prompting)."
-  fi
-  if [[ -r /dev/tty ]]; then
-    read -rsp "Service-account password: " SIA_PASSWORD </dev/tty; echo
-  else
-    die "no password supplied and no terminal available to prompt."
-  fi
-fi
 
 # =============================================================================
 # CHECKS
@@ -180,7 +158,7 @@ log "  cluster    $(kubectl config current-context 2>/dev/null)"
 log "  namespace  ${NAMESPACE}"
 log "  registry   ${REGISTRY%%/*}"
 log "  image      ${IMAGE_REMOTE}"
-log "  secrets    ${PULL_SECRET}, ${SECRET_NAME}"
+log "  pull secret  ${PULL_SECRET}"
 log ""
 log "  The Helm release is NOT part of this. Nothing is deployed."
 if ! confirm "Proceed?"; then
@@ -192,6 +170,7 @@ fi
 if [[ "${SKIP_BUILD}" == "true" ]]; then
   step "Skipping build (--skip-build)"
 else
+  [[ -z "${BASE_IMAGE}" ]] && die "BASE_IMAGE is not set. Set it in sia-connector.env or pass --base-image."
   step "Building ${IMAGE_LOCAL} for ${PLATFORM}"
   info "ROOT_DOMAIN=${ROOT_DOMAIN} is baked into the image and cannot be changed later"
   docker build \
@@ -201,9 +180,6 @@ else
     --build-arg KUBECTL_VERSION="${KUBECTL_VERSION}" \
     --tag "${IMAGE_LOCAL}" \
     "${DOCKERFILE_DIR}"
-  [[ "${BASE_IMAGE}" == "alpine:latest" ]] && \
-    warn "base image" "alpine:latest — use a hardened base for production"
-
   step "Verifying the built image before publishing"
   _baked="$(docker run --rm --platform "${PLATFORM}" --entrypoint /bin/sh "${IMAGE_LOCAL}" \
               -c 'printf %s "${ROOT_DOMAIN}"' 2>/dev/null || true)"
@@ -284,40 +260,15 @@ else
   rm -f "${_dockercfg}"
 fi
 
-# --- auth secret ------------------------------------------------------------
-# Generated as YAML with base64 values rather than `--from-literal`, which
-# would place the password in kubectl's argv where any local user could read it.
-step "Creating ${SECRET_NAME} secret"
-_b64() { printf '%s' "$1" | base64 | tr -d '\n'; }
-cat > "${TMPDIR_SELF}/sia-auth.yaml" <<EOF
-apiVersion: v1
-kind: Secret
-metadata:
-  name: ${SECRET_NAME}
-  namespace: ${NAMESPACE}
-type: Opaque
-data:
-  username: $(_b64 "${SIA_USERNAME}")
-  password: $(_b64 "${SIA_PASSWORD}")
-  idaptiveTenantId: $(_b64 "${IDAPTIVE_TENANT_ID}")
-  tenantSubdomain: $(_b64 "${TENANT_SUBDOMAIN}")
-EOF
-kubectl apply -f "${TMPDIR_SELF}/sia-auth.yaml"
-rm -f "${TMPDIR_SELF}/sia-auth.yaml"
 
 # =============================================================================
 # DONE
 # =============================================================================
-heading "Ready to release"
-log "  In namespace ${NAMESPACE}:"
-log "    namespace     ready"
-[[ "${SKIP_PULL_SECRET}" == "false" ]] && log "    ${PULL_SECRET}   image pull secret"
-log "    ${SECRET_NAME}      connector credentials"
+heading "Ready for SIA connector deployment"
+log "  Namespace ${NAMESPACE}: ready"
+log "  Registry: ${IMAGE_REMOTE}"
+[[ "${SKIP_PULL_SECRET}" == "false" ]] && log "  Repositories credentials:  ${PULL_SECRET}"
 log ""
-log "  In your registry:"
-log "    ${IMAGE_REMOTE}"
-log ""
-log "  Nothing is deployed. The Helm release is the remaining step."
 (( WARN_COUNT > 0 )) && log "" && log "  Review the ${WARN_COUNT} warning(s) above."
 log ""
 log "  Transcript: ${LOG_FILE}"
