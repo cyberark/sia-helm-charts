@@ -94,12 +94,14 @@ preparse_config "$@"
 
 # If --config was not given, fall back to sia-connector.env in the current
 # directory. Fail immediately if that file also does not exist.
+_CONF_FILE="${_SELF_DIR}/sia-connector.env"
+
 if [[ -z "${CONFIG_FILE}" ]]; then
-  if [[ -f "./sia-connector.env" ]]; then
-    CONFIG_FILE="./sia-connector.env"
-    set -a; source "${CONFIG_FILE}"; set +a
+  if [[ -f "${_CONF_FILE}" ]]; then
+    CONFIG_FILE="${_CONF_FILE}"
+    set -a; source "${_CONF_FILE}"; set +a
   else
-    die "no --config given and ./sia-connector.env not found."
+    die "no --config given and ${_CONF_FILE} not found."
   fi
 fi
 
@@ -149,23 +151,29 @@ if [[ "${CHECK_ONLY}" == "true" ]]; then
   exit 0
 fi
 
+if [[ "${SKIP_BUILD}" == "true" ]]; then
+  ok "Skipping build"
+else
+  [[ -z "${BASE_IMAGE}" ]] && die "BASE_IMAGE is not set. Set it in sia-connector.env or pass --base-image."
+fi
+
 # =============================================================================
 # PREPARE
 # =============================================================================
 log ""
-log "About to prepare:"
-log "  cluster    $(kubectl config current-context 2>/dev/null)"
-log "  namespace  ${NAMESPACE}"
-log "  registry   ${REGISTRY%%/*}"
-log "  image      ${IMAGE_REMOTE}"
-log "  pull secret  ${PULL_SECRET}"
+log "Ready for SIA connector deployment:"
+log "  Cluster:      $(kubectl config current-context 2>/dev/null)"
+log "  Namespace:    ${NAMESPACE}"
+log "  Registry:     ${REGISTRY%%/*}"
+log "  Image:        ${IMAGE_REMOTE}"
+log "  Pull secret:  ${PULL_SECRET}"
 log ""
-log "  The Helm release is NOT part of this. Nothing is deployed."
 if ! confirm "Proceed?"; then
   log "Aborted. Nothing was created."
   exit 0
 fi
 
+WARN_COUNT=0
 # --- build ------------------------------------------------------------------
 if [[ "${SKIP_BUILD}" == "true" ]]; then
   step "Skipping build (--skip-build)"
