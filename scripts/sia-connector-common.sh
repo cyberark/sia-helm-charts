@@ -442,7 +442,7 @@ check_base_image() {
   if [[ "${SKIP_BUILD}" == "true" ]]; then
     ok "base image" "Skipping build."
   else
-    [[ -z "${BASE_IMAGE}" ]] && die "BASE_IMAGE is not set. Set it in sia-connector.env or pass --base-image."
+    [[ -z "${BASE_IMAGE}" ]] && fail "BASE_IMAGE is not set. Set it in sia-connector.env or pass --base-image."
     ok "base image" "${BASE_IMAGE}"
   fi
 
