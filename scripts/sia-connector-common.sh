@@ -441,11 +441,12 @@ check_connectivity() {
 check_base_image() {
   if [[ "${SKIP_BUILD}" == "true" ]]; then
     ok "base image" "Skipping build."
+  elif [[ -z "${BASE_IMAGE}" ]]; then
+    fail "base image" "BASE_IMAGE is not set. Set it in sia-connector.env or pass --base-image."
   else
-    [[ -z "${BASE_IMAGE}" ]] && fail "BASE_IMAGE is not set. Set it in sia-connector.env or pass --base-image."
     ok "base image" "${BASE_IMAGE}"
   fi
-
+  return 0
 }
 
 print_summary() {
