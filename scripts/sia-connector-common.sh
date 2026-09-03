@@ -174,9 +174,21 @@ common_parse_arg() {
 # ---------------------------------------------------------------------------
 setup_transcript() {
   local _prefix="$1"
+  local _stamp=""
+  local _log_dir=""
+
+  _stamp="$(date -u +%Y%m%dT%H%M%SZ)"
   if [[ -z "${LOG_FILE}" ]]; then
-    LOG_FILE="./${_prefix}-$(date -u +%Y%m%dT%H%M%SZ).log"
+    if [[ "${_prefix}" == /* ]]; then
+      LOG_FILE="${_prefix}-${_stamp}.log"
+    else
+      LOG_FILE="./${_prefix}-${_stamp}.log"
+    fi
   fi
+
+  _log_dir="$(dirname "${LOG_FILE}")"
+  mkdir -p "${_log_dir}" || die "cannot create log directory: ${_log_dir}"
+
   exec > >(tee >(sed -E 's/(password|token|secret)=[^ ]*/\1=<redacted>/gi' > "${LOG_FILE}")) 2>&1
   return 0
 }
