@@ -75,11 +75,12 @@ locally on your workstation and calls the SIA REST API directly:
 `helm uninstall` triggers a `pre-delete` Job
 (`templates/pre-delete-cleanup.yaml`) which:
 
-1. Deregisters each connector from the SIA control plane
-   (`DELETE /api/connectors/{id}?force_delete=true`), so stale connector
-   entries do not linger in the SIA Admin Portal.
-2. Deletes the `PersistentVolumeClaims` created by the StatefulSet's
-   `volumeClaimTemplates` (Helm does not delete PVCs by default).
+1. Deregisters **every** connector discovered from `<statefulset>-<n>-connector-id`
+   ConfigMaps in the namespace — including replicas that were scaled down before
+   uninstall (`DELETE /api/connectors/{id}?force_delete=true`), so stale
+   connector entries do not linger in the SIA Admin Portal.
+2. Deletes **all** matching `connector-data-<statefulset>-<n>` PVCs (not only
+   the current replica count).
 
 Both steps are best-effort: failures are logged as warnings but do not block
 uninstall.
@@ -307,12 +308,11 @@ helm uninstall sia-connector --namespace "${NAMESPACE}" --wait
 What the `pre-delete` hook does behind the scenes:
 
 1. Obtains an OAuth2 token from the SIA identity endpoint.
-2. Reads each replica's connector ID from the
-   `<pod>-connector-id` ConfigMap.
-3. Calls `DELETE /api/connectors/{id}?force_delete=true` for each
-   connector, removing it from the SIA Admin Portal.
-4. Deletes the `connector-data-<statefulset>-<n>` PVCs created by the
-   StatefulSet.
+2. Lists every ConfigMap named `<statefulset>-<n>-connector-id` in the
+   namespace and reads each `connector_id`.
+3. Calls `DELETE /api/connectors/{id}?force_delete=true` for each discovered
+   connector, including those from scaled-down replicas.
+4. Deletes all `connector-data-<statefulset>-<n>` PVCs for this release.
 
 All steps are best-effort and log warnings on failure — they will not block
 the uninstall.
@@ -433,8 +433,10 @@ with the explicit revision number instead of the plain form.
 
 ### PVCs are left behind after `helm uninstall`
 
-The `pre-delete` hook deletes PVCs on a best-effort basis. If it timed out
-or the cluster refused the delete, clean them up manually:
+Chart **1.0.25+** deletes all `connector-data-<statefulset>-<n>` PVCs discovered
+in the namespace, including those from scaled-down replicas. On older chart
+versions, only PVCs up to the current replica count were removed. If cleanup
+still fails or you are on an older chart, delete manually:
 
 ```bash
 kubectl get pvc                                   -n "${NAMESPACE}"
