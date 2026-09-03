@@ -438,6 +438,16 @@ check_connectivity() {
   return 0
 }
 
+check_base_image() {
+  if [[ "${SKIP_BUILD}" == "true" ]]; then
+    ok "base image" "Skipping build."
+  else
+    [[ -z "${BASE_IMAGE}" ]] && die "BASE_IMAGE is not set. Set it in sia-connector.env or pass --base-image."
+    ok "base image" "${BASE_IMAGE}"
+  fi
+
+}
+
 print_summary() {
   heading "Preflight summary"
   printf '  %s%d passed%s   %s%d warning(s)%s   %s%d failure(s)%s\n' \
@@ -455,6 +465,7 @@ run_prerequisite_checks() {
   check_connectivity
   check_cluster
   check_registry
+  check_base_image
   print_summary
   return 0
 }
