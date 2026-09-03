@@ -75,8 +75,7 @@ Infrastructure
   --dockerfile-dir <path>         Directory holding the connector Dockerfile
   --kubectl-version <ver>         kubectl embedded in the image; default: v1.30.0
   --base-image <ref>              Image base layer; required
-  --config <path>                 Read any of the above as KEY=value
-  --log-file <path>               Default: ./sia-connector-prerequisites-<timestamp>.log
+  --config <path>                 Full path to sia-connector.env config file
 
 Behaviour
   --check-only                    Run the checks only; change nothing
@@ -124,7 +123,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-setup_transcript "sia-connector-prerequisites"
+setup_transcript "${_SELF_DIR}/sia-connector-prerequisites"
 make_tmpdir
 
 log "${C_BOLD}CyberArk SIA Kubernetes Connector — prerequisites v${SIA_TOOLS_VERSION}${C_RESET}"
