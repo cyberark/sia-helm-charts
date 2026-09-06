@@ -153,7 +153,7 @@ prepare_and_serve_local_repo() {
   python3 -m http.server "${_port}" >/tmp/sia-local-helm-server.log 2>&1 &
   _pid=$!
   ok "local chart repo" "http://localhost:${_port}/${_chart_dir}/ (PID ${_pid})"
-  info "stop local HTTP server with: kill -9 ${_pid}"
+  printf '         %sTo stop local HTTP server:%s kill -9 %s\n' "${C_YELLOW}" "${C_RESET}" "${_pid}"
   return 0
 }
 
