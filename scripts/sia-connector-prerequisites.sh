@@ -81,6 +81,8 @@ Behaviour
   --check-only                    Run the checks only; change nothing
   --skip-build                    Image is already built and pushed; skip build + push
   --skip-pull-secret              Registry is public, or the secret already exists
+  --serve-local-repo              Build local chart index and start localhost HTTP server in background
+  --local-repo-port <port>        Local chart repo server port; default: 18080
   --yes                           Non-interactive; never prompt
   -h, --help                      This message
 EOF
@@ -259,6 +261,11 @@ else
     -n "${NAMESPACE}" --dry-run=client -o yaml | kubectl apply -f -
   unset _reg_pass
   rm -f "${_dockercfg}"
+fi
+
+# --- optional local chart repo ----------------------------------------------
+if [[ "${SERVE_LOCAL_REPO}" == "true" ]]; then
+  prepare_and_serve_local_repo "sia-k8s-connector" "${LOCAL_REPO_PORT}"
 fi
 
 

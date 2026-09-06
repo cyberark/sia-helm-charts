@@ -46,6 +46,8 @@ CHECK_ONLY=false
 SKIP_BUILD=false
 SKIP_PULL_SECRET=false
 ASSUME_YES=false
+SERVE_LOCAL_REPO=true
+LOCAL_REPO_PORT="18080"
 
 # Derived during the checks
 IMAGE_LOCAL=""
@@ -100,6 +102,39 @@ is_ecr()      { [[ "${REGISTRY}" =~ \.dkr\.ecr\.[a-z0-9-]+\.amazonaws\.com ]]; }
 ecr_region()  { printf '%s' "${REGISTRY}" | sed -E 's/^[0-9]+\.dkr\.ecr\.([a-z0-9-]+)\.amazonaws\.com.*/\1/'; }
 
 make_tmpdir() { TMPDIR_SELF="$(mktemp -d)"; return 0; }
+
+port_is_listening() {
+  local _port="${1:?}"
+  lsof -nP -iTCP:"${_port}" -sTCP:LISTEN >/dev/null 2>&1
+}
+
+prepare_and_serve_local_repo() {
+  local _chart_dir="${1:-sia-k8s-connector}"
+  local _port="${2:-${LOCAL_REPO_PORT}}"
+  local _index_src="${_chart_dir}/index.yaml"
+  local _pid=""
+
+  step "Preparing local chart repo on localhost:${_port}"
+
+  if [[ ! -d "${_chart_dir}" ]]; then
+    warn "local chart repo" "chart directory not found: ${_chart_dir}"
+    return 0
+  fi
+
+  if port_is_listening "${_port}"; then
+    warn "local repo port" "${_port} is busy — choose --local-repo-port <free-port>"
+    return 0
+  fi
+
+  helm repo index "${_chart_dir}/" --url "http://localhost:${_port}/${_chart_dir}/"
+  mv "${_index_src}" "./index.yaml"
+
+  python3 -m http.server "${_port}" >/tmp/sia-local-helm-server.log 2>&1 &
+  _pid=$!
+  ok "local chart repo" "http://localhost:${_port}/${_chart_dir}/ (PID ${_pid})"
+  info "stop local HTTP server with: kill -9 ${_pid}"
+  return 0
+}
 
 confirm() {
   local prompt="$1"
@@ -160,6 +195,8 @@ common_parse_arg() {
     --platform)               PLATFORM="${2:?}" ;;
     --dockerfile-dir)         DOCKERFILE_DIR="${2:?}" ;;
     --log-file)               LOG_FILE="${2:?}" ;;
+    --serve-local-repo)       SERVE_LOCAL_REPO=true; ARG_SHIFT=1 ;;
+    --local-repo-port)        LOCAL_REPO_PORT="${2:?}" ;;
     --config)                 : ;;   # already consumed by preparse_config
     --skip-build)             SKIP_BUILD=true;        ARG_SHIFT=1 ;;
     --skip-pull-secret)       SKIP_PULL_SECRET=true;  ARG_SHIFT=1 ;;
@@ -274,6 +311,16 @@ check_tooling() {
   for _t in curl base64; do
     have "${_t}" && ok "${_t}" "present" || fail "${_t}" "not found"
   done
+
+  if [[ "${SERVE_LOCAL_REPO}" == "true" ]]; then
+    if have python3; then
+      ok "python3" "present (used by local chart repo server)"
+    else
+      fail "python3" "not found — required when local chart repo serving is enabled"
+    fi
+  else
+    skip "python3" "local chart repo serving disabled"
+  fi
 
   if is_ecr; then
     if have aws; then ok "aws cli" "present (registry is Amazon ECR)"
@@ -414,6 +461,7 @@ check_registry() {
 check_connectivity() {
   heading "Preflight — SIA endpoint connectivity"
   local _url="" _code="" _any_blocked=false _v=""
+  local _id_url="" _id_fallback_url="" _used_id_url=""
 
   if [[ -z "${ROOT_DOMAIN}" || -z "${IDAPTIVE_TENANT_ID}" || -z "${TENANT_SUBDOMAIN}" ]]; then
     skip "connectivity" "tenant parameters incomplete"
@@ -430,18 +478,33 @@ check_connectivity() {
     return 0
   fi
 
-  for _url in \
-    "https://${IDAPTIVE_TENANT_ID}.id.${ROOT_DOMAIN}" \
-    "https://${TENANT_SUBDOMAIN}.dpa.${ROOT_DOMAIN}/api"; do
-    _code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "${_url}" 2>/dev/null; true)"
-    if [[ "${_code}" == "000" ]]; then
-      fail "reachable" "${_url}"
-      info "no HTTP response — DNS, routing or a firewall may be blocking the connection"
-      _any_blocked=true
-    else
-      ok "reachable" "${_url} → HTTP ${_code}"
-    fi
-  done
+  _id_url="https://${IDAPTIVE_TENANT_ID}.id.${ROOT_DOMAIN}"
+  _used_id_url="${_id_url}"
+  _code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "${_id_url}" 2>/dev/null; true)"
+  if [[ "${_code}" == "000" ]]; then
+    _id_fallback_url="https://${IDAPTIVE_TENANT_ID,,}.my.idaptive.app"
+    info "${_id_url} unreachable (HTTP 000) — retrying with ${_id_fallback_url}"
+    _code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "${_id_fallback_url}" 2>/dev/null; true)"
+    _used_id_url="${_id_fallback_url}"
+  fi
+
+  if [[ "${_code}" == "000" ]]; then
+    fail "reachable" "${_used_id_url}"
+    info "no HTTP response — DNS, routing or a firewall may be blocking the connection"
+    _any_blocked=true
+  else
+    ok "reachable" "${_used_id_url} → HTTP ${_code}"
+  fi
+
+  _url="https://${TENANT_SUBDOMAIN}.dpa.${ROOT_DOMAIN}/api"
+  _code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "${_url}" 2>/dev/null; true)"
+  if [[ "${_code}" == "000" ]]; then
+    fail "reachable" "${_url}"
+    info "no HTTP response — DNS, routing or a firewall may be blocking the connection"
+    _any_blocked=true
+  else
+    ok "reachable" "${_url} → HTTP ${_code}"
+  fi
 
   if [[ "${_any_blocked}" == "false" ]]; then
     info "an authenticated endpoint answering 401/403/5xx still proves egress works;"
