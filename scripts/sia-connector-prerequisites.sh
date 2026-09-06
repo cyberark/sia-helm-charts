@@ -162,6 +162,7 @@ log "  Namespace:    ${NAMESPACE}"
 log "  Registry:     ${REGISTRY%%/*}"
 log "  Image:        ${IMAGE_REMOTE}"
 log "  Pull secret:  ${PULL_SECRET}"
+[[ "${SERVE_LOCAL_REPO}" == "true" ]] && log "  Local Repo Server: selected (port ${LOCAL_REPO_PORT})"
 log ""
 if ! confirm "Proceed?"; then
   log "Aborted. Nothing was created."
