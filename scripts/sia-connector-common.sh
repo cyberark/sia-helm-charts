@@ -108,11 +108,25 @@ port_is_listening() {
   lsof -nP -iTCP:"${_port}" -sTCP:LISTEN >/dev/null 2>&1
 }
 
+port_listener_info() {
+  local _port="${1:?}"
+  lsof -nP -iTCP:"${_port}" -sTCP:LISTEN -Fpc 2>/dev/null | awk '
+    /^p/ { pid = substr($0, 2) }
+    /^c/ {
+      cmd = substr($0, 2)
+      if (pid != "") {
+        printf "%s\t%s\n", pid, cmd
+        exit
+      }
+    }
+  '
+}
 prepare_and_serve_local_repo() {
   local _chart_dir="${1:-sia-k8s-connector}"
   local _port="${2:-${LOCAL_REPO_PORT}}"
   local _index_src="${_chart_dir}/index.yaml"
   local _pid=""
+  local _info="" _busy_pid="" _busy_proc=""
 
   step "Preparing local chart repo on localhost:${_port}"
 
@@ -122,7 +136,14 @@ prepare_and_serve_local_repo() {
   fi
 
   if port_is_listening "${_port}"; then
-    warn "local repo port" "${_port} is busy — choose --local-repo-port <free-port>"
+    _info="$(port_listener_info "${_port}" || true)"
+    if [[ -n "${_info}" ]]; then
+      _busy_pid="${_info%%$'\t'*}"
+      _busy_proc="${_info#*$'\t'}"
+      warn "local repo port" "${_port} is busy PID ${_busy_pid} Process name ${_busy_proc}"
+    else
+      warn "local repo port" "${_port} is busy"
+    fi
     return 0
   fi
 
@@ -458,6 +479,35 @@ check_registry() {
   return 0
 }
 
+check_local_repo() {
+  heading "Preflight — local repo"
+  local _info="" _pid="" _proc=""
+
+  if [[ "${SERVE_LOCAL_REPO}" != "true" ]]; then
+    skip "local repo preflight" "serving disabled"
+    return 0
+  fi
+
+  if [[ ! "${LOCAL_REPO_PORT}" =~ ^[0-9]+$ ]] || (( LOCAL_REPO_PORT < 1 || LOCAL_REPO_PORT > 65535 )); then
+    fail "local repo port" "${LOCAL_REPO_PORT} is invalid (use 1-65535)"
+    return 0
+  fi
+
+  if port_is_listening "${LOCAL_REPO_PORT}"; then
+    _info="$(port_listener_info "${LOCAL_REPO_PORT}" || true)"
+    if [[ -n "${_info}" ]]; then
+      _pid="${_info%%$'\t'*}"
+      _proc="${_info#*$'\t'}"
+      warn "local repo port" "${LOCAL_REPO_PORT} in use (PID ${_pid}, process ${_proc})"
+    else
+      warn "local repo port" "${LOCAL_REPO_PORT} in use"
+    fi
+  else
+    ok "local repo port" "${LOCAL_REPO_PORT} is free"
+  fi
+  return 0
+}
+
 check_connectivity() {
   heading "Preflight — SIA endpoint connectivity"
   local _url="" _code="" _any_blocked=false _v=""
@@ -540,6 +590,7 @@ print_summary() {
 run_prerequisite_checks() {
   check_parameters
   check_tooling
+  check_local_repo
   check_connectivity
   check_cluster
   check_registry
