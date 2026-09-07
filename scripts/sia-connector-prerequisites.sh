@@ -162,7 +162,7 @@ log "  Namespace:        ${NAMESPACE}"
 log "  Registry:         ${REGISTRY%%/*}"
 log "  Image:            ${IMAGE_REMOTE}"
 log "  Registry secret:  ${PULL_SECRET}"
-[[ "${SERVE_LOCAL_REPO}" == "true" ]] && log "  Local Repo Server: selected (port ${LOCAL_REPO_PORT})"
+[[ "${SERVE_LOCAL_REPO}" == "true" ]] && log "  Local Chart Repo:  http://localhost:${LOCAL_REPO_PORT}/sia-k8s-connector/"
 log ""
 if ! confirm "Proceed?"; then
   log "Aborted. Nothing was created."
