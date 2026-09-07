@@ -1,0 +1,11 @@
+{
+  "chart": "sia-connector",
+  "version": "1.0.2609071005",
+  "versionTag": "v1.0.2609071005",
+  "chartArchive": "sia-connector-1.0.2609071005.tgz",
+  "imageTag": "latest",
+  "connectorClientVersion": "v1.14.815",
+  "commit": "1947700b30da13ac52e6718513b12b77c1defbe8",
+  "buildDate": "07-09-2026 10:05:36",
+  "buildUrl": "https://everest-controller.atlantis.cyberark.com/job/Everest-connector-client/job/master/job/Everest-connector-client-master-full/job/master/815/"
+}
