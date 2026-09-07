@@ -157,11 +157,11 @@ fi
 # =============================================================================
 log ""
 log "Ready for SIA connector deployment:"
-log "  Cluster:      $(kubectl config current-context 2>/dev/null)"
-log "  Namespace:    ${NAMESPACE}"
-log "  Registry:     ${REGISTRY%%/*}"
-log "  Image:        ${IMAGE_REMOTE}"
-log "  Pull secret:  ${PULL_SECRET}"
+log "  Cluster:          $(kubectl config current-context 2>/dev/null)"
+log "  Namespace:        ${NAMESPACE}"
+log "  Registry:         ${REGISTRY%%/*}"
+log "  Image:            ${IMAGE_REMOTE}"
+log "  Registry secret:  ${PULL_SECRET}"
 [[ "${SERVE_LOCAL_REPO}" == "true" ]] && log "  Local Repo Server: selected (port ${LOCAL_REPO_PORT})"
 log ""
 if ! confirm "Proceed?"; then
@@ -274,9 +274,9 @@ fi
 # DONE
 # =============================================================================
 heading "Ready for SIA connector deployment"
-log "  Namespace ${NAMESPACE}: ready"
-log "  Registry: ${IMAGE_REMOTE}"
-[[ "${SKIP_PULL_SECRET}" == "false" ]] && log "  Repositories credentials:  ${PULL_SECRET}"
+log "  Namespace: ${NAMESPACE}"
+log "  Docker Image URI: ${IMAGE_REMOTE}"
+[[ "${SKIP_PULL_SECRET}" == "false" ]] && log "  Registry secret:  ${PULL_SECRET}"
 log ""
 (( WARN_COUNT > 0 )) && log "" && log "  Review the ${WARN_COUNT} warning(s) above."
 log ""
