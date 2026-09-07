@@ -533,7 +533,7 @@ check_connectivity() {
   _used_id_url="${_id_url}"
   _code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "${_id_url}" 2>/dev/null; true)"
   if [[ "${_code}" == "000" ]]; then
-    _id_fallback_url="https://${IDAPTIVE_TENANT_ID,,}.my.idaptive.app"
+    _id_fallback_url="https://$(echo "${IDAPTIVE_TENANT_ID}" | tr '[:upper:]' '[:lower:]').my.idaptive.app"
     info "${_id_url} unreachable (HTTP 000) — retrying with ${_id_fallback_url}"
     _code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "${_id_fallback_url}" 2>/dev/null; true)"
     _used_id_url="${_id_fallback_url}"
