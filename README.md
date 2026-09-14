@@ -15,6 +15,10 @@ It is the recommended path for teams that prefer managing Helm releases directly
 | [curl](https://curl.se/) | any recent | The prerequisite checks and the maintenance plugin |
 | [jq](https://jqlang.github.io/jq/) | 1.6+ | The `sia-maintenance` plugin only |
 | [AWS CLI](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html) | v2 | Only if your registry is Amazon ECR |
+| [gcloud CLI](https://cloud.google.com/sdk/docs/install) | any current | Only if your registry is Google Artifact / Container Registry |
+| [Azure CLI](https://learn.microsoft.com/cli/azure/install-azure-cli) | any current | Only if your registry is Azure Container Registry |
+
+You need only the cloud CLI for the prerequisite script you run — see [Verify all of this automatically](#verify-all-of-this-automatically) below.
 
 You also need:
 
@@ -26,6 +30,16 @@ You also need:
 ### Verify all of this automatically
 
 `sia-connector-prerequisites.sh` checks every item above, plus the two things you cannot check from your own machine at all: whether your **cluster nodes** can reach your SIA environment, and whether the cluster has a StorageClass the connector's volume can actually bind to. It **installs nothing**.
+
+There is one script per cloud, each fully self-contained. Run the one matching where your registry lives:
+
+| Your registry | Script |
+|---|---|
+| Amazon ECR, or any other registry | `scripts/sia-connector-prerequisites.sh` |
+| Google Artifact / Container Registry | `scripts/sia-connector-prerequisites-gcp.sh` |
+| Azure Container Registry | `scripts/sia-connector-prerequisites-azure.sh` |
+
+All three take the same flags and run the same checks in the same order; they differ only in how they talk to your registry.
 
 ```bash
 cp scripts/sia-connector.env.example sia-connector.env

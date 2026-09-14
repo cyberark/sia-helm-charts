@@ -1,7 +1,29 @@
 # SIA Kubernetes Connector — prerequisites and preparation
 
-`sia-connector-prerequisites.sh` gets your environment ready to release the connector, in
-two phases:
+## Pick the script for your cloud
+
+There is one script per cloud, and they are **fully self-contained** — pick the one that
+matches where your registry lives and ignore the other two. Each carries its own copy of
+every check, so the file you run is the whole story; there is no shared library to read
+alongside it.
+
+| Your registry | Script | Cloud CLI |
+|---|---|---|
+| `<account>.dkr.ecr.<region>.amazonaws.com`, or anything else | [`sia-connector-prerequisites.sh`](../scripts/sia-connector-prerequisites.sh) | `aws` |
+| `<location>-docker.pkg.dev/<project>/<repo>`, `gcr.io/<project>` | [`sia-connector-prerequisites-gcp.sh`](../scripts/sia-connector-prerequisites-gcp.sh) | `gcloud` |
+| `<name>.azurecr.io` (also `.cn`, `.us`) | [`sia-connector-prerequisites-azure.sh`](../scripts/sia-connector-prerequisites-azure.sh) | `az` |
+
+All three take the same flags, run the same checks in the same order, print the same output
+format and use the same exit codes. They differ only in how they authenticate to the
+registry, whether they have to create the repository before pushing, and how they build the
+image pull secret. The AWS script also handles any generic registry via `docker login`.
+
+Everything below applies to all three; the cloud-specific parts are called out where they
+differ. Substitute your own script name for `sia-connector-prerequisites.sh` in the commands.
+
+---
+
+Each script gets your environment ready to release the connector, in two phases:
 
 1. **Checks** — validates this machine, your cluster, your registry and your tenant
    parameters. Nothing is touched, and the script stops here if any check fails.
@@ -31,8 +53,17 @@ environment without exposing secrets.
 | `kubectl` | Talking to your cluster | 1.24 |
 | `helm` | Reading the chart | 3.10 |
 | `docker` | Building the connector image | Any current version, daemon running |
-| `aws` | Only if your registry is Amazon ECR | v2 |
+| `aws` | The AWS script, if your registry is Amazon ECR | v2 |
+| `gcloud` | The GCP script | Any current version |
+| `az` | The Azure script | Any current version |
+| `gke-gcloud-auth-plugin` | GKE, only if your kubeconfig references it | Any current version |
+| `kubelogin` | Entra-integrated AKS, only if your kubeconfig references it | Any current version |
 | `curl`, `base64` | Internal use | Present on any Linux/macOS |
+
+You need only the cloud CLI belonging to the script you run. The two credential plugins are
+asked for only when your kubeconfig actually references them — which is independent of where
+your registry lives, so a GKE cluster pushing to ECR needs `gke-gcloud-auth-plugin` and the
+AWS script.
 
 You also need:
 
@@ -151,9 +182,44 @@ HPA with `--set autoscaling.enabled=false`.
 
 ### Registry
 
-For Amazon ECR, verifies that the AWS CLI is present and that your credentials are valid.
-It also warns that ECR tokens expire after **12 hours**, which is why a cluster that pulled
-fine this morning can fail this evening.
+This is the one check that differs per script. Each looks for the mistake specific to its
+own cloud.
+
+**AWS** — the AWS CLI is present and the credentials are valid; the ECR repository exists or
+will be created on push. Warns that ECR tokens expire after **12 hours**, which is why a
+cluster that pulled fine this morning can fail this evening.
+
+**GCP** — the active account can see the project, and the Artifact Registry repository exists
+and is of `DOCKER` format. Artifact Registry keeps the repository in the *registry path*
+rather than in the image name, so `<host>/<project>` alone is not a valid push target; that
+is reported against the parameter instead, because it is wrong whichever credential you use.
+If your active `gcloud` project differs from the one in the registry path you are told — it
+is easy to inherit one pointing elsewhere. `gcr.io` is accepted but flagged as deprecated.
+
+**Azure** — the subscription can see the registry, its login server matches what you passed,
+and `publicNetworkAccess` is not `Disabled` (which would need a private endpoint to push).
+ACR creates the repository on first push, so there is nothing to pre-create.
+
+#### Token lifetimes differ sharply, and it matters
+
+ECR tokens last about 12 hours, `gcloud` access tokens about **1 hour**, and ACR access
+tokens about **3 hours**. A pull secret built from a short-lived token survives the install —
+the connector pulls its image once at start-up — but the next restart or rescheduling fails
+with `ImagePullBackOff`, long after anything obviously happened. The GCP and Azure scripts
+therefore warn at the moment they create the secret, so it lands in the warning count, and
+name the durable alternative:
+
+| Cloud | Durable alternative |
+|---|---|
+| GCP | Grant the node service account `roles/artifactregistry.reader`, then `--skip-pull-secret` |
+| GCP | Or `--registry-username _json_key --registry-password-file <key.json>` |
+| Azure | `az aks update -n <cluster> -g <group> --attach-acr <name>`, then `--skip-pull-secret` |
+| Azure | Or a service principal with `AcrPull` via `--registry-username`/`--registry-password-file` |
+
+On GCP and Azure an explicit `--registry-username` **takes precedence** over the cloud token
+path. This is the reverse of the AWS script's ordering, and deliberate: on those two clouds
+the explicit credential is the one that does not expire, so it should win. The AWS script
+keeps the AWS CLI first, so an inherited `--registry-username` cannot quietly displace it.
 
 ---
 
@@ -179,8 +245,18 @@ Catching it here costs seconds; catching it later means a rebuild, a re-push and
 
 ### 3. Publish it
 
-Authenticates to your registry — `docker login`, or `aws ecr get-login-password` for ECR,
-where the repository is also created if it does not exist — then tags and pushes.
+Authenticates to your registry, creates the repository if that registry will not accept a
+push without one, then tags and pushes:
+
+| Script | Authentication | Repository |
+|---|---|---|
+| AWS | `aws ecr get-login-password`, or `docker login` for a generic registry | Created if absent (ECR) |
+| GCP | `gcloud auth print-access-token` piped into `docker login` | Created if absent (Artifact Registry); on first push for `gcr.io` |
+| Azure | `az acr login` | Created on first push |
+
+The GCP script pipes a token into `docker login` rather than running `gcloud auth
+configure-docker`, which would install a credential helper into this machine's docker config
+permanently. Only the push about to happen is authenticated.
 
 Note that the chart sets `imagePullPolicy=Always`, so moving an existing tag changes what any
 other release using that tag will run after its next restart.
