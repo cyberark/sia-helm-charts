@@ -156,7 +156,7 @@ fi
 # PREPARE
 # =============================================================================
 log ""
-log "Ready for SIA connector deployment:"
+log "Pending deployment parameters:"
 log "  Cluster:          $(kubectl config current-context 2>/dev/null)"
 log "  Namespace:        ${NAMESPACE}"
 log "  Registry:         ${REGISTRY%%/*}"
