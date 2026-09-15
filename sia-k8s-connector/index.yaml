@@ -3,6 +3,17 @@ entries:
   sia-connector:
   - apiVersion: v2
     appVersion: latest
+    created: "2026-09-15T15:05:06.3574116Z"
+    description: CyberArk SIA connector - downloads ephemeral connector binary and
+      config at startup
+    digest: 1309c7394797b66154157a433e66a893e8375cd997a5a9abfce70b9464fbb6f6
+    name: sia-connector
+    type: application
+    urls:
+    - https://raw.githubusercontent.com/cyberark/sia-helm-charts/main/sia-k8s-connector/sia-connector-1.0.2609151750.tgz
+    version: 1.0.2609151750
+  - apiVersion: v2
+    appVersion: latest
     created: "2026-09-15T06:29:49.247276127Z"
     description: CyberArk SIA connector - downloads ephemeral connector binary and
       config at startup
@@ -45,4 +56,4 @@ entries:
     urls:
     - https://raw.githubusercontent.com/cyberark/sia-helm-charts/main/sia-k8s-connector/sia-connector-1.0.2609071005.tgz
     version: 1.0.2609071005
-generated: "2026-09-15T06:29:49.24662136Z"
+generated: "2026-09-15T15:05:06.356810674Z"
