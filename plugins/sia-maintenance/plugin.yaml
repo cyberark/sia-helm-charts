@@ -11,3 +11,6 @@ description: |-
     helm -n sia-k8s-connector sia-maintenance enable
     helm -n sia-k8s-connector sia-maintenance disable
 command: "$HELM_PLUGIN_DIR/sia-maintenance.sh"
+hooks:
+  install: "chmod +x $HELM_PLUGIN_DIR/sia-maintenance.sh"
+  update: "chmod +x $HELM_PLUGIN_DIR/sia-maintenance.sh"
