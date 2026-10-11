@@ -167,7 +167,10 @@ long-running sessions you do not want to interrupt.
 
 ```bash
 export NAMESPACE=sia-k8s-connector
-export NEW_VERSION=1.0.24   # chart version you are upgrading to
+helm repo add sia https://raw.githubusercontent.com/cyberark/sia-helm-charts/main/sia-k8s-connector
+helm repo update sia
+helm search repo sia/sia-connector --versions   # pick the version to upgrade to
+export NEW_VERSION=<CHART_VERSION>
 
 # ── Step 1 — enable maintenance mode ─────────────────────────────────────
 # The SIA platform stops routing new sessions to the connectors.
@@ -182,8 +185,9 @@ kubectl logs -n "${NAMESPACE}" -l app.kubernetes.io/instance=sia-connector \
   --tail=100 -f
 
 # ── Step 3 — upgrade to the new chart version ────────────────────────────
-helm upgrade sia-connector \
-  ./sia-k8s-connector/sia-connector-${NEW_VERSION}.tgz \
+helm repo update sia
+helm upgrade sia-connector sia/sia-connector \
+  --version "${NEW_VERSION}" \
   --namespace "${NAMESPACE}" \
   --reuse-values
 
@@ -205,8 +209,13 @@ Use in non-production environments, or when no long-running sessions are
 active.
 
 ```bash
-helm upgrade sia-connector \
-  ./sia-k8s-connector/sia-connector-${NEW_VERSION}.tgz \
+helm repo add sia https://raw.githubusercontent.com/cyberark/sia-helm-charts/main/sia-k8s-connector
+helm repo update sia
+helm search repo sia/sia-connector --versions   # pick the version to upgrade to
+export NEW_VERSION=<CHART_VERSION>
+
+helm upgrade sia-connector sia/sia-connector \
+  --version "${NEW_VERSION}" \
   --namespace "${NAMESPACE}" \
   --reuse-values
 ```
@@ -457,18 +466,23 @@ Connectors**.
 ## Appendix — end-to-end example
 
 Complete session upgrading `sia-connector` from `1.0.19` to `1.0.24`
-gracefully, then rolling back after a regression is detected:
+gracefully, then rolling back after a regression is detected. The version
+numbers are illustrative — use one listed by
+`helm search repo sia/sia-connector --versions`:
 
 ```bash
 export NAMESPACE=sia-k8s-connector
+export NEW_VERSION=1.0.24
+helm repo add sia https://raw.githubusercontent.com/cyberark/sia-helm-charts/main/sia-k8s-connector
 
 # 1. Enable maintenance and drain sessions
 helm -n "${NAMESPACE}" sia-maintenance enable
 # ... wait for session count to reach 0 ...
 
 # 2. Upgrade
-helm upgrade sia-connector \
-  ./sia-k8s-connector/sia-connector-1.0.24.tgz \
+helm repo update sia
+helm upgrade sia-connector sia/sia-connector \
+  --version "${NEW_VERSION}" \
   --namespace "${NAMESPACE}" \
   --reuse-values
 
