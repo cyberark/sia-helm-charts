@@ -67,8 +67,9 @@ CHECK_ONLY=false
 SKIP_BUILD=false
 SKIP_PULL_SECRET=false
 ASSUME_YES=false
-SERVE_LOCAL_REPO=true
-LOCAL_REPO_PORT="18080"
+
+# Public Helm repository the chart is installed from
+CHART_REPO_URL="https://raw.githubusercontent.com/cyberark/sia-helm-charts/main/sia-k8s-connector"
 
 # Derived during the checks
 IMAGE_LOCAL=""
@@ -150,61 +151,6 @@ gar_repo() {
 
 make_tmpdir() { TMPDIR_SELF="$(mktemp -d)"; return 0; }
 
-port_is_listening() {
-  local _port="${1:?}"
-  lsof -nP -iTCP:"${_port}" -sTCP:LISTEN >/dev/null 2>&1
-}
-
-port_listener_info() {
-  local _port="${1:?}"
-  lsof -nP -iTCP:"${_port}" -sTCP:LISTEN -Fpc 2>/dev/null | awk '
-    /^p/ { pid = substr($0, 2) }
-    /^c/ {
-      cmd = substr($0, 2)
-      if (pid != "") {
-        printf "%s\t%s\n", pid, cmd
-        exit
-      }
-    }
-  '
-}
-prepare_and_serve_local_repo() {
-  local _chart_dir="${1:-sia-k8s-connector}"
-  local _port="${2:-${LOCAL_REPO_PORT}}"
-  local _index_src="${_chart_dir}/index.yaml"
-  local _pid=""
-  local _info="" _busy_pid="" _busy_proc=""
-
-  step "Preparing local chart repo on localhost:${_port}"
-
-  if [[ ! -d "${_chart_dir}" ]]; then
-    warn "local chart repo" "chart directory not found: ${_chart_dir}"
-    return 0
-  fi
-
-  if port_is_listening "${_port}"; then
-    _info="$(port_listener_info "${_port}" || true)"
-    if [[ -n "${_info}" ]]; then
-      _busy_pid="${_info%%$'\t'*}"
-      _busy_proc="${_info#*$'\t'}"
-      warn "local repo port" "${_port} is busy PID ${_busy_pid} Process name ${_busy_proc}"
-    else
-      warn "local repo port" "${_port} is busy"
-    fi
-    return 0
-  fi
-
-  helm repo index "${_chart_dir}/" --url "http://localhost:${_port}/${_chart_dir}/"
-  mv "${_index_src}" "./index.yaml"
-
-  python3 -m http.server "${_port}" >/tmp/sia-local-helm-server.log 2>&1 &
-  _pid=$!
-  ok "local chart repo" "http://localhost:${_port}/${_chart_dir}/ (PID ${_pid})"
-  log "  Local Repo Server: Running on port ${_port} (PID ${_pid})"
-  printf '         %sTo stop local HTTP server:%s kill -9 %s\n' "${C_YELLOW}" "${C_RESET}" "${_pid}"
-  return 0
-}
-
 confirm() {
   local prompt="$1"
   [[ "${ASSUME_YES}" == "true" ]] && return 0
@@ -264,8 +210,8 @@ common_parse_arg() {
     --platform)               PLATFORM="${2:?}" ;;
     --dockerfile-dir)         DOCKERFILE_DIR="${2:?}" ;;
     --log-file)               LOG_FILE="${2:?}" ;;
-    --serve-local-repo)       SERVE_LOCAL_REPO=true; ARG_SHIFT=1 ;;
-    --local-repo-port)        LOCAL_REPO_PORT="${2:?}" ;;
+    --serve-local-repo|--local-repo-port)
+      die "$1 is no longer supported: the chart is published at ${CHART_REPO_URL}" ;;
     --config)                 : ;;   # already consumed by preparse_config
     --skip-build)             SKIP_BUILD=true;        ARG_SHIFT=1 ;;
     --skip-pull-secret)       SKIP_PULL_SECRET=true;  ARG_SHIFT=1 ;;
@@ -390,16 +336,6 @@ check_tooling() {
   for _t in curl base64; do
     have "${_t}" && ok "${_t}" "present" || fail "${_t}" "not found"
   done
-
-  if [[ "${SERVE_LOCAL_REPO}" == "true" ]]; then
-    if have python3; then
-      ok "python3" "present (used by local chart repo server)"
-    else
-      fail "python3" "not found — required when local chart repo serving is enabled"
-    fi
-  else
-    skip "python3" "local chart repo serving disabled"
-  fi
 
   if is_google_registry; then
     if have gcloud; then ok "gcloud cli" "present (registry is Google $(registry_label))"
@@ -598,31 +534,22 @@ check_registry() {
   return 0
 }
 
-check_local_repo() {
-  heading "Preflight — local repo"
-  local _info="" _pid="" _proc=""
+check_chart_repo() {
+  heading "Preflight — chart repository"
+  local _code=""
 
-  if [[ "${SERVE_LOCAL_REPO}" != "true" ]]; then
-    skip "local repo preflight" "serving disabled"
+  if ! have curl; then
+    skip "chart repository" "curl not found — see tooling check above"
     return 0
   fi
 
-  if [[ ! "${LOCAL_REPO_PORT}" =~ ^[0-9]+$ ]] || (( LOCAL_REPO_PORT < 1 || LOCAL_REPO_PORT > 65535 )); then
-    fail "local repo port" "${LOCAL_REPO_PORT} is invalid (use 1-65535)"
-    return 0
-  fi
-
-  if port_is_listening "${LOCAL_REPO_PORT}"; then
-    _info="$(port_listener_info "${LOCAL_REPO_PORT}" || true)"
-    if [[ -n "${_info}" ]]; then
-      _pid="${_info%%$'\t'*}"
-      _proc="${_info#*$'\t'}"
-      warn "local repo port" "${LOCAL_REPO_PORT} in use (PID ${_pid}, process ${_proc})"
-    else
-      warn "local repo port" "${LOCAL_REPO_PORT} in use"
-    fi
+  _code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "${CHART_REPO_URL}/index.yaml" 2>/dev/null; true)"
+  if [[ "${_code}" == "200" ]]; then
+    ok "chart repository" "${CHART_REPO_URL}"
   else
-    ok "local repo port" "${LOCAL_REPO_PORT} is free"
+    warn "chart repository" "${CHART_REPO_URL}/index.yaml → HTTP ${_code}"
+    info "'helm repo add' will not work from this machine; install the chart from the"
+    info ".tgz in sia-k8s-connector/ of your clone instead"
   fi
   return 0
 }
@@ -709,7 +636,7 @@ print_summary() {
 run_prerequisite_checks() {
   check_parameters
   check_tooling
-  check_local_repo
+  check_chart_repo
   check_connectivity
   check_cluster
   check_registry
@@ -768,8 +695,6 @@ Behaviour
   --check-only                    Run the checks only; change nothing
   --skip-build                    Image is already built and pushed; skip build + push
   --skip-pull-secret              Registry is public, or the secret already exists
-  --serve-local-repo              Build local chart index and start localhost HTTP server in background
-  --local-repo-port <port>        Local chart repo server port; default: 18080
   --yes                           Non-interactive; never prompt
   -h, --help                      This message
 EOF
@@ -849,7 +774,7 @@ log "  Namespace:        ${NAMESPACE}"
 log "  Registry:         ${REGISTRY%%/*}"
 log "  Image:            ${IMAGE_REMOTE}"
 log "  Registry secret:  ${PULL_SECRET}"
-[[ "${SERVE_LOCAL_REPO}" == "true" ]] && log "  Local chart repo: http://localhost:${LOCAL_REPO_PORT}/sia-k8s-connector/"
+log "  Chart repository: ${CHART_REPO_URL}"
 log ""
 if ! confirm "Proceed?"; then
   log "Aborted. Nothing was created."
@@ -982,12 +907,6 @@ else
   rm -f "${_dockercfg}"
 fi
 
-# --- optional local chart repo ----------------------------------------------
-if [[ "${SERVE_LOCAL_REPO}" == "true" ]]; then
-  prepare_and_serve_local_repo "sia-k8s-connector" "${LOCAL_REPO_PORT}"
-fi
-
-
 # =============================================================================
 # DONE
 # =============================================================================
@@ -996,6 +915,15 @@ log "  Namespace: ${NAMESPACE}"
 log "  Docker Image URI: ${IMAGE_REMOTE}"
 [[ "${SKIP_PULL_SECRET}" == "false" ]] && log "  Registry secret:  ${PULL_SECRET}"
 log ""
+log "  Create the sia-auth secret (README, step 3), then install the chart:"
+log "    helm repo add sia ${CHART_REPO_URL}"
+log "    helm repo update sia"
+log "    helm upgrade --install sia-connector sia/sia-connector \\"
+log "      --namespace ${NAMESPACE} \\"
+log "      --set connectorPoolId=<CONNECTOR_POOL_ID> \\"
+[[ "${SKIP_PULL_SECRET}" == "false" ]] && log "      --set 'imagePullSecrets[0].name=${PULL_SECRET}' \\"
+log "      --set image.repository=${REGISTRY}/${IMAGE_NAME} \\"
+log "      --set image.tag=${IMAGE_TAG}"
 (( WARN_COUNT > 0 )) && log "" && log "  Review the ${WARN_COUNT} warning(s) above."
 log ""
 log "  Transcript: ${LOG_FILE}"

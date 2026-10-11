@@ -182,8 +182,9 @@ kubectl logs -n "${NAMESPACE}" -l app.kubernetes.io/instance=sia-connector \
   --tail=100 -f
 
 # ── Step 3 — upgrade to the new chart version ────────────────────────────
-helm upgrade sia-connector \
-  ./sia-k8s-connector/sia-connector-${NEW_VERSION}.tgz \
+helm repo update sia
+helm upgrade sia-connector sia/sia-connector \
+  --version "${NEW_VERSION}" \
   --namespace "${NAMESPACE}" \
   --reuse-values
 
@@ -205,8 +206,9 @@ Use in non-production environments, or when no long-running sessions are
 active.
 
 ```bash
-helm upgrade sia-connector \
-  ./sia-k8s-connector/sia-connector-${NEW_VERSION}.tgz \
+helm repo update sia
+helm upgrade sia-connector sia/sia-connector \
+  --version "${NEW_VERSION}" \
   --namespace "${NAMESPACE}" \
   --reuse-values
 ```
@@ -467,8 +469,9 @@ helm -n "${NAMESPACE}" sia-maintenance enable
 # ... wait for session count to reach 0 ...
 
 # 2. Upgrade
-helm upgrade sia-connector \
-  ./sia-k8s-connector/sia-connector-1.0.24.tgz \
+helm repo update sia
+helm upgrade sia-connector sia/sia-connector \
+  --version 1.0.24 \
   --namespace "${NAMESPACE}" \
   --reuse-values
 

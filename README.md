@@ -37,7 +37,7 @@ chmod 600 sia-connector.env
 
 It exits 0 when every check passes and 1 if any of them fails, so it also works as a CI gate. It needs no password, and the only object it creates anywhere is a throwaway connectivity-probe pod, which it deletes again — pass `--skip-egress-check` to avoid even that.
 
-Run it from the root of your clone and it finds both the chart archive and the connector build context on its own — no `CHART_REF` or `DOCKERFILE_DIR` needed. From anywhere else, pass `--chart-ref` and `--dockerfile-dir`.
+Run it from the root of your clone and it finds the connector build context on its own — no `DOCKERFILE_DIR` needed. From anywhere else, pass `--dockerfile-dir`. It also checks that this machine can reach the public chart repository.
 
 Each check, and what to do when it fails, is documented in [prerequisites.md](docs/prerequisites.md).
 
@@ -45,17 +45,15 @@ Each check, and what to do when it fails, is documented in [prerequisites.md](do
 
 ## Installation
 
-### 1. Get the chart
-
-The chart ships in this repository, so a clone already has it — there is no Helm repository to add:
+### 1. Add the chart repository
 
 ```bash
-git clone https://github.com/cyberark/sia-helm-charts.git
-cd sia-helm-charts
-ls sia-k8s-connector/sia-connector-*.tgz
+helm repo add sia https://raw.githubusercontent.com/cyberark/sia-helm-charts/main/sia-k8s-connector
+helm repo update sia
+helm search repo sia/sia-connector
 ```
 
-> **Note:** Helm cannot authenticate to a private GitHub repository, so `helm repo add` pointed at this repository will not work. Install from the archive, as every command below does.
+> **Note:** You still need a clone of this repository to build the connector image and to install the `sia-maintenance` plugin.
 
 ### 2. Create the namespace
 
@@ -106,7 +104,7 @@ kubectl create secret docker-registry sia-registry-creds \
 ### 5. Install the chart
 
 ```bash
-helm upgrade --install sia-connector ./sia-k8s-connector/sia-connector-<CHART_VERSION>.tgz \
+helm upgrade --install sia-connector sia/sia-connector \
   --namespace sia-k8s-connector \
   --set connectorPoolId="<CONNECTOR_POOL_ID>" \
   --set replicaCount=1 \
@@ -241,7 +239,8 @@ helm -n <NAMESPACE> sia-maintenance enable
 #   Monitor session counts in the SIA Admin Portal or connector logs.
 
 # Step 3 — upgrade to the new chart version.
-helm upgrade sia-connector ./sia-k8s-connector/sia-connector-<NEW_VERSION>.tgz \
+helm repo update sia
+helm upgrade sia-connector sia/sia-connector \
   --namespace <NAMESPACE> \
   --reuse-values
 
@@ -255,7 +254,8 @@ helm -n <NAMESPACE> sia-maintenance disable
 Use this when there are no active long-running sessions, or in non-production environments.
 
 ```bash
-helm upgrade sia-connector ./sia-k8s-connector/sia-connector-<NEW_VERSION>.tgz \
+helm repo update sia
+helm upgrade sia-connector sia/sia-connector \
   --namespace <NAMESPACE> \
   --reuse-values
 ```
@@ -317,7 +317,8 @@ helm -n <NAMESPACE> sia-maintenance disable
 To upgrade to a newer chart version without session draining (fast path):
 
 ```bash
-helm upgrade sia-connector ./sia-k8s-connector/sia-connector-<NEW_VERSION>.tgz \
+helm repo update sia
+helm upgrade sia-connector sia/sia-connector \
   --namespace <NAMESPACE> \
   --reuse-values
 ```

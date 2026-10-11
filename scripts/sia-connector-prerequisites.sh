@@ -81,8 +81,6 @@ Behaviour
   --check-only                    Run the checks only; change nothing
   --skip-build                    Image is already built and pushed; skip build + push
   --skip-pull-secret              Registry is public, or the secret already exists
-  --serve-local-repo              Build local chart index and start localhost HTTP server in background
-  --local-repo-port <port>        Local chart repo server port; default: 18080
   --yes                           Non-interactive; never prompt
   -h, --help                      This message
 EOF
@@ -162,7 +160,7 @@ log "  Namespace:        ${NAMESPACE}"
 log "  Registry:         ${REGISTRY%%/*}"
 log "  Image:            ${IMAGE_REMOTE}"
 log "  Registry secret:  ${PULL_SECRET}"
-[[ "${SERVE_LOCAL_REPO}" == "true" ]] && log "  Local chart repo: http://localhost:${LOCAL_REPO_PORT}/sia-k8s-connector/"
+log "  Chart repository: ${CHART_REPO_URL}"
 log ""
 if ! confirm "Proceed?"; then
   log "Aborted. Nothing was created."
@@ -264,12 +262,6 @@ else
   rm -f "${_dockercfg}"
 fi
 
-# --- optional local chart repo ----------------------------------------------
-if [[ "${SERVE_LOCAL_REPO}" == "true" ]]; then
-  prepare_and_serve_local_repo "sia-k8s-connector" "${LOCAL_REPO_PORT}"
-fi
-
-
 # =============================================================================
 # DONE
 # =============================================================================
@@ -278,6 +270,15 @@ log "  Namespace: ${NAMESPACE}"
 log "  Docker Image URI: ${IMAGE_REMOTE}"
 [[ "${SKIP_PULL_SECRET}" == "false" ]] && log "  Registry secret:  ${PULL_SECRET}"
 log ""
+log "  Create the sia-auth secret (README, step 3), then install the chart:"
+log "    helm repo add sia ${CHART_REPO_URL}"
+log "    helm repo update sia"
+log "    helm upgrade --install sia-connector sia/sia-connector \\"
+log "      --namespace ${NAMESPACE} \\"
+log "      --set connectorPoolId=<CONNECTOR_POOL_ID> \\"
+[[ "${SKIP_PULL_SECRET}" == "false" ]] && log "      --set 'imagePullSecrets[0].name=${PULL_SECRET}' \\"
+log "      --set image.repository=${REGISTRY}/${IMAGE_NAME} \\"
+log "      --set image.tag=${IMAGE_TAG}"
 (( WARN_COUNT > 0 )) && log "" && log "  Review the ${WARN_COUNT} warning(s) above."
 log ""
 log "  Transcript: ${LOG_FILE}"
